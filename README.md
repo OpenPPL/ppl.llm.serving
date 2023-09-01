@@ -55,7 +55,7 @@
     You can use various clients to send requests to the server:
 
     ```bash
-    ./client_pressure 127.0.0.1:23333
+    ./client_sample 127.0.0.1:23333
     ```
 
     or

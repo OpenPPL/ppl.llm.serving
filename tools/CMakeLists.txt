@@ -1,6 +1,6 @@
 if(PPL_LLM_ENABLE_GRPC_SERVING)
-    add_executable(client_valide tools/client_valide.cc)
-    target_link_libraries(client_valide ppl_llm_grpc_proto_static grpc++)
+    add_executable(client_sample tools/client_sample.cc)
+    target_link_libraries(client_sample ppl_llm_grpc_proto_static grpc++)
 
     add_executable(client_pressure tools/client_pressure.cc)
     target_link_libraries(client_pressure ppl_llm_grpc_proto_static grpc++)
