@@ -1,0 +1,7 @@
+__pycache__
+build/
+.vscode/
+deps/
+build_release/
+build_debug/
+bak/

@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package ppl.llm.proto;
+
+service LLMService {
+    rpc Generation (BatchedRequest) returns (stream Response) {}
+}
+
+message Request {
+    uint64 id = 1;
+    float temperature = 2;
+    uint32 generation_length = 3;
+    string prompt = 4;
+}
+
+message BatchedRequest {
+    repeated Request req = 1;
+}
+
+enum Status {
+    PROCESSING = 0;
+    FINISHED = 1;
+    FAILED = 2;
+}
+
+message Response {
+    Status status = 1;
+    uint64 id = 2;
+    string generated = 3;
+}
