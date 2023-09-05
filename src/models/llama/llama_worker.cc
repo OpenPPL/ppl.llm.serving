@@ -503,17 +503,26 @@ RetCode LLaMAWorker::Init() {
         LOG(ERROR) << "create worker thread failed.";
         return RC_OTHER_ERROR;
     }
+    worker_thread_created_ = true;
 
     return RC_SUCCESS;
 }
 
-bool LLaMAWorker::ParseRequest(const LlamaRequest& req, std::unordered_map<uint64_t, TidController>* tid_controllers) {
-    if (check_result_.rest_iters < 0) {
+struct RequestCheckResult final {
+    int64_t cache_index;
+    int rest_iters;
+    int first_fill_len;
+};
+
+static bool ParseRequest(const LlamaRequest& req, const RequestCheckResult& check_res,
+                         WorkerController* worker_controller,
+                         std::unordered_map<uint64_t, TidController>* tid_controllers) {
+    if (check_res.rest_iters < 0) {
         req.conn->NotifyFailure(req.orig->id);
         return true;
     }
 
-    if (check_result_.cache_index == INT64_MAX) {
+    if (check_res.cache_index == INT64_MAX) {
         LOG(ERROR) << "catch invalid cache_index.";
         return false;
     }
@@ -523,17 +532,17 @@ bool LLaMAWorker::ParseRequest(const LlamaRequest& req, std::unordered_map<uint6
     tid_ctrl.tid = tid;
     tid_ctrl.prompt = req.orig->prompt;
     tid_ctrl.temperature = req.orig->temperature;
-    tid_ctrl.rest_iters = check_result_.rest_iters;
-    tid_ctrl.first_fill_len = check_result_.first_fill_len;
-    tid_ctrl.total_len = check_result_.first_fill_len + check_result_.rest_iters;
-    tid_ctrl.cache_index = check_result_.cache_index;
+    tid_ctrl.rest_iters = check_res.rest_iters;
+    tid_ctrl.first_fill_len = check_res.first_fill_len;
+    tid_ctrl.total_len = check_res.first_fill_len + check_res.rest_iters;
+    tid_ctrl.cache_index = check_res.cache_index;
     tid_ctrl.next_tokens = std::move(req.token_id_list);
 
-    worker_controller_.tid_list.push_back(&tid_ctrl);
-    worker_controller_.start_pos.push_back(0);
-    worker_controller_.temperatures.push_back(tid_ctrl.temperature);
-    worker_controller_.cache_indices.push_back(check_result_.cache_index);
-    worker_controller_.total_rest_iters = std::max<int64_t>(worker_controller_.total_rest_iters, tid_ctrl.rest_iters);
+    worker_controller->tid_list.push_back(&tid_ctrl);
+    worker_controller->start_pos.push_back(0);
+    worker_controller->temperatures.push_back(tid_ctrl.temperature);
+    worker_controller->cache_indices.push_back(check_res.cache_index);
+    worker_controller->total_rest_iters = std::max<int64_t>(worker_controller->total_rest_iters, tid_ctrl.rest_iters);
 
     return true;
 }
@@ -780,28 +789,25 @@ void LLaMAWorker::Work() {
     long long step = 0;
     int cache_cool_down_count = 0;
 
-    std::shared_ptr<LlamaRequest> req;
+    RequestCheckResult check_res;
+    auto check_func = [this, &check_res, &cache_cool_down_count](const LlamaRequest& req) -> bool {
+        check_res.cache_index = INT64_MAX;
+        check_res.rest_iters = -1;
+        check_res.first_fill_len = req.token_id_list.size();
 
-    auto check_func = [this, &cache_cool_down_count](const LlamaRequest& req) -> bool {
-        RequestCheckResult& res = check_result_;
-
-        res.cache_index = INT64_MAX;
-        res.rest_iters = -1;
-        res.first_fill_len = req.token_id_list.size();
-
-        if (res.first_fill_len + req.orig->generation_length > (size_t)worker_config_.max_tokens_per_request) {
-            res.rest_iters = worker_config_.max_tokens_per_request - res.first_fill_len;
+        if (check_res.first_fill_len + req.orig->generation_length > (size_t)worker_config_.max_tokens_per_request) {
+            check_res.rest_iters = worker_config_.max_tokens_per_request - check_res.first_fill_len;
         } else {
-            res.rest_iters = req.orig->generation_length;
+            check_res.rest_iters = req.orig->generation_length;
         }
 
-        if (res.rest_iters < 0) {
+        if (check_res.rest_iters < 0) {
             return true;
         }
 
-        res.cache_index = idx_mgr_.Alloc(res.first_fill_len + res.rest_iters);
+        check_res.cache_index = idx_mgr_.Alloc(check_res.first_fill_len + check_res.rest_iters);
 
-        if (res.cache_index == INT64_MAX) {
+        if (check_res.cache_index == INT64_MAX) {
             cache_cool_down_count = std::min(std::max(1, (int)floorf(worker_controller_.tid_list.size() * 0.1f)), 8);
             return false;
         }
@@ -819,12 +825,12 @@ void LLaMAWorker::Work() {
             if (worker_controller_.tid_list.size() < (size_t)worker_config_.max_running_batch &&
                 cache_cool_down_count <= 0) {
                 while (true) {
-                    req = sched_.TryPopRequest(check_func);
+                    auto req = sched_.TryPopRequest(check_func);
                     if (!req) {
                         break;
                     }
 
-                    if (!ParseRequest(*req, &tid_controllers)) {
+                    if (!ParseRequest(*req, check_res, &worker_controller_, &tid_controllers)) {
                         break;
                     }
 
@@ -885,7 +891,7 @@ void LLaMAWorker::Work() {
                 model_config_.vocab_size, worker_config_.top_p, worker_config_.top_k, gen_tokens.data());
             if (rc != RC_SUCCESS) {
                 LOG(ERROR) << "SampleTopPTopK failed: " << GetRetCodeStr(rc);
-                exit(-1);
+                break;
             }
         }
         profiler.sampling_duration += profiler.step_sampling_duration;
@@ -949,7 +955,7 @@ void LLaMAWorker::Work() {
                                                     last_tid_gen_tokens, &decoder_lock_, &thread_pool_));
             if (rc != RC_SUCCESS) {
                 LOG(ERROR) << "thread_pool_.AddTask() failed: " << GetRetCodeStr(rc);
-                exit(-1);
+                break;
             }
         }
         profiler.send_duration += profiler.step_send_duration;
@@ -1003,18 +1009,13 @@ void LLaMAWorker::Process(const shared_ptr<Request>& req, Connection* conn) {
 
 void* LLaMAWorker::WorkerThreadFunc(void* arg) {
     auto worker = (LLaMAWorker*)arg;
-    pthread_mutex_t signal_lock;
-    pthread_mutex_init(&signal_lock, nullptr);
-
     while (true) {
-        pthread_mutex_lock(&signal_lock);
+        pthread_mutex_lock(&worker->uuid_data_lock_);
         LOG(INFO) << "waiting for request ...";
-        pthread_cond_wait(&worker->req_signal_, &signal_lock);
-        pthread_mutex_unlock(&signal_lock);
+        pthread_cond_wait(&worker->req_signal_, &worker->uuid_data_lock_);
+        pthread_mutex_unlock(&worker->uuid_data_lock_);
         worker->Work();
     }
-
-    pthread_mutex_destroy(&signal_lock);
     return nullptr;
 }
 
