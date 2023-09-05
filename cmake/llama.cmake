@@ -17,10 +17,8 @@ if(PPL_LLM_ENABLE_DEBUG)
     add_definitions(-DPPL_LLM_ENABLE_DEBUG)
 endif()
 
-find_package(OpenMP REQUIRED)
-
 add_library(ppl_llm_llama_static STATIC ${__PPL_LLAMA_SRC__})
-target_link_libraries(ppl_llm_llama_static PUBLIC pplnn_static ppl_sentencepiece_static OpenMP::OpenMP_CXX)
+target_link_libraries(ppl_llm_llama_static PUBLIC pplnn_static ppl_sentencepiece_static)
 target_include_directories(ppl_llm_llama_static PUBLIC ${PROJECT_SOURCE_DIR}/src)
 if(PPL_LLM_ENABLE_PROFILING)
     target_compile_definitions(ppl_llm_llama_static PUBLIC PPL_LLM_ENABLE_PROFILING)

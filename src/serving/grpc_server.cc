@@ -26,7 +26,7 @@ using namespace grpc;
 namespace ppl { namespace llm {
 
 struct GRPCConnection final : public Connection {
-    GRPCConnection(GRPCServer::ThreadArg* arg) : targ(arg), writer(&ctx) {
+    GRPCConnection() : writer(&ctx) {
         pthread_mutex_init(&send_lock, nullptr);
     }
     ~GRPCConnection() {
@@ -35,8 +35,6 @@ struct GRPCConnection final : public Connection {
 
     void Send(const Response&) override;
     void NotifyFailure(uint64_t) override;
-
-    GRPCServer::ThreadArg* targ;
 
     enum {
         NEW,
@@ -86,22 +84,13 @@ GRPCServer::GRPCServer() {
 }
 
 void GRPCServer::Loop(RequestProcessor* processor) {
-    arg_.processor = processor;
-    while (true) {
-        processor->Wait();
-        processor->Work();
-    }
-}
-
-void* GRPCServer::NotificationThreadFunc(void* arg) {
-    auto targ = (ThreadArg*)arg;
-    auto cq = targ->notification_cq.get();
-    auto service = &targ->service;
+    auto cq = arg_.notification_cq.get();
+    auto service = &arg_.service;
 
     // prepare to process one request
-    auto new_event = new GRPCConnection(targ);
-    service->RequestGeneration(&new_event->ctx, &new_event->pb_req, &new_event->writer, targ->new_call_cq.get(),
-                               targ->notification_cq.get(), new_event);
+    auto new_event = new GRPCConnection();
+    service->RequestGeneration(&new_event->ctx, &new_event->pb_req, &new_event->writer, arg_.new_call_cq.get(),
+                               arg_.notification_cq.get(), new_event);
 
     while (true) {
         bool ok;
@@ -113,11 +102,11 @@ void* GRPCServer::NotificationThreadFunc(void* arg) {
 
         auto event = static_cast<GRPCConnection*>(tag);
         switch (event->status) {
-            case GRPCConnection::NEW: {
+            case GRPCConnection::NEW:
                 // prepare to process next request
-                new_event = new GRPCConnection(targ);
+                new_event = new GRPCConnection();
                 service->RequestGeneration(&new_event->ctx, &new_event->pb_req, &new_event->writer,
-                                           targ->new_call_cq.get(), targ->notification_cq.get(), new_event);
+                                           arg_.new_call_cq.get(), arg_.notification_cq.get(), new_event);
 
                 for (int req_idx = 0; req_idx < event->pb_req.req_size(); ++req_idx) {
                     auto& pb_req = event->pb_req.req(req_idx);
@@ -126,21 +115,18 @@ void* GRPCServer::NotificationThreadFunc(void* arg) {
                     req->prompt = pb_req.prompt();
                     req->temperature = pb_req.temperature();
                     req->generation_length = pb_req.generation_length();
-                    targ->processor->Process(req, event);
+                    processor->Process(req, event);
                 }
 
                 event->send_queue.emplace_back(proto::Response()); // fake item
                 event->status = GRPCConnection::SENDING;
                 event->writer.SendInitialMetadata(event);
                 break;
-            }
             default:
                 LOG(ERROR) << "impossible or invalid status [" << (uint32_t)event->status << "] in Loop().";
-                return nullptr;
+                return;
         }
     }
-
-    return nullptr;
 }
 
 void* GRPCServer::NewCallThreadFunc(void* arg) {
@@ -206,13 +192,6 @@ RetCode GRPCServer::Init(const string& addr) {
     }
     new_call_thread_created_ = true;
 
-    ret = pthread_create(&notification_thread_, nullptr, NotificationThreadFunc, &arg_);
-    if (ret != 0) {
-        LOG(ERROR) << "create notification thread failed.";
-        return RC_OTHER_ERROR;
-    }
-    notification_thread_created_ = true;
-
     return RC_SUCCESS;
 }
 
@@ -220,11 +199,6 @@ GRPCServer::~GRPCServer() {
     server_->Shutdown();
     arg_.notification_cq->Shutdown();
     arg_.new_call_cq->Shutdown();
-
-    if (notification_thread_created_) {
-        pthread_cancel(notification_thread_);
-        pthread_join(notification_thread_, nullptr);
-    }
 
     if (new_call_thread_created_) {
         pthread_cancel(new_call_thread_);

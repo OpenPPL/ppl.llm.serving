@@ -43,7 +43,6 @@ public:
 
 private:
     static void* NewCallThreadFunc(void*);
-    static void* NotificationThreadFunc(void*);
 
 public:
     struct ThreadArg final {
@@ -59,8 +58,6 @@ public:
         std::unique_ptr<grpc::ServerCompletionQueue> new_call_cq;
 
         std::function<void(Connection*)> on_disconnected_func;
-
-        RequestProcessor* processor = nullptr;
     };
 
 private:
@@ -68,8 +65,6 @@ private:
     std::unique_ptr<grpc::Server> server_;
 
     bool new_call_thread_created_ = false;
-    bool notification_thread_created_ = false;
-    pthread_t notification_thread_;
     pthread_t new_call_thread_;
     ThreadArg arg_;
 };

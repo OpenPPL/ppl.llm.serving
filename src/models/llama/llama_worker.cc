@@ -16,22 +16,21 @@
 // under the License.
 
 #include "llama_worker.h"
+#include "utils/utils.h"
 
-#include "ppl/nn/models/onnx/runtime_builder_factory.h"
 #include "ppl/nn/common/logger.h"
 
-#include <iostream>
 #include <string>
 #include <memory>
 #include <algorithm>
-#include <random>
 #include <limits>
 #include <cmath>
 #include <chrono>
+
+#ifdef PPL_LLM_ENABLE_DEBUG
+#include <iostream>
 #include <fstream>
-#include <unistd.h>
-#include <assert.h>
-#include <omp.h>
+#endif
 
 using namespace std;
 
@@ -84,33 +83,167 @@ struct TidGenTokens final {
     std::vector<int> gen_tokens;
 };
 
-class DecoderThreadTask final : public ppl::common::ThreadTask {
+static void FindUData(unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data, pthread_mutex_t* uuid_data_lock,
+                      uint64_t uuid, LLaMAWorker::UuidData* udata, bool should_remove) {
+    pthread_mutex_lock(uuid_data_lock);
+    auto uuid_data_ref = uuid_data->find(uuid);
+    if (uuid_data_ref != uuid_data->end()) {
+        *udata = uuid_data_ref->second;
+        if (should_remove) {
+            uuid_data->erase(uuid_data_ref);
+        }
+    }
+    pthread_mutex_unlock(uuid_data_lock);
+}
+
+class TidGenTokenTask final : public JoinableThreadTask {
+public:
+    TidGenTokenTask(uint64_t tid, vector<int>* gen_tokens,
+                    std::unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data, pthread_mutex_t* uuid_data_lock,
+                    const sentencepiece::SentencePieceProcessor* tokenizer)
+        : tid_(tid)
+        , gen_tokens_(gen_tokens)
+        , uuid_data_(uuid_data)
+        , uuid_data_lock_(uuid_data_lock)
+        , tokenizer_(tokenizer) {}
+
+protected:
+    bool IsFinished() const override {
+        return is_finished_;
+    }
+
+    shared_ptr<ThreadTask> Process() override {
+        int last_gen_token = gen_tokens_->back();
+        const std::string& cur_piece = tokenizer_->IdToPiece(last_gen_token);
+        if (gen_tokens_->size() != 1 && cur_piece.substr(0, 3) == "▁") { // normal case
+            Response rsp;
+            std::vector<int> new_tokens(gen_tokens_->begin(), gen_tokens_->end() - 1);
+            tokenizer_->Decode(new_tokens, &rsp.generated);
+            LOG(DEBUG) << "task [" << tid_ << "] new word: " << rsp.generated;
+            gen_tokens_->at(0) = last_gen_token;
+            gen_tokens_->resize(1);
+            // send response
+            LLaMAWorker::UuidData udata;
+            FindUData(uuid_data_, uuid_data_lock_, tid_, &udata, false);
+            if (udata.conn) {
+                rsp.id = udata.req_id;
+                rsp.flag = Response::NORMAL;
+                udata.conn->Send(rsp);
+            }
+        }
+
+        is_finished_ = true;
+        return shared_ptr<ThreadTask>();
+    }
+
+private:
+    bool is_finished_ = false;
+    const uint64_t tid_;
+    vector<int>* gen_tokens_;
+    std::unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data_;
+    pthread_mutex_t* uuid_data_lock_;
+    const sentencepiece::SentencePieceProcessor* tokenizer_;
+};
+
+class LastTidGenTokenTask final : public JoinableThreadTask {
+public:
+    LastTidGenTokenTask(uint64_t tid, const vector<int>* gen_tokens,
+                        std::unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data, pthread_mutex_t* uuid_data_lock,
+                        const sentencepiece::SentencePieceProcessor* tokenizer)
+        : tid_(tid)
+        , gen_tokens_(gen_tokens)
+        , uuid_data_(uuid_data)
+        , uuid_data_lock_(uuid_data_lock)
+        , tokenizer_(tokenizer) {}
+
+protected:
+    bool IsFinished() const override {
+        return is_finished_;
+    }
+    shared_ptr<ThreadTask> Process() override {
+        Response rsp;
+        tokenizer_->Decode(*gen_tokens_, &rsp.generated);
+        LOG(DEBUG) << "task [" << tid_ << "] last word: " << rsp.generated;
+        LLaMAWorker::UuidData udata;
+        FindUData(uuid_data_, uuid_data_lock_, tid_, &udata, true);
+        if (udata.conn) {
+            rsp.id = udata.req_id;
+            rsp.flag = Response::IS_LAST;
+            udata.conn->Send(rsp);
+        }
+        is_finished_ = true;
+        return shared_ptr<ThreadTask>();
+    }
+
+private:
+    bool is_finished_ = false;
+    const uint64_t tid_;
+    const vector<int>* gen_tokens_;
+    std::unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data_;
+    pthread_mutex_t* uuid_data_lock_;
+    const sentencepiece::SentencePieceProcessor* tokenizer_;
+};
+
+class DecoderThreadTask final : public ThreadTask {
 public:
     DecoderThreadTask(const sentencepiece::SentencePieceProcessor* tokenizer,
                       std::unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data, pthread_mutex_t* uuid_data_lock,
                       const std::shared_ptr<std::unordered_map<uint64_t, std::vector<int>>>& tid_gen_tokens,
                       const std::shared_ptr<std::vector<TidGenTokens>>& last_tid_gen_tokens,
-                      pthread_mutex_t* decoder_lock)
+                      pthread_mutex_t* decoder_lock, ThreadPool* tp)
         : uuid_data_(uuid_data)
         , uuid_data_lock_(uuid_data_lock)
         , tokenizer_(tokenizer)
         , tid_gen_tokens_(tid_gen_tokens)
         , last_tid_gen_tokens_(last_tid_gen_tokens)
-        , decoder_lock_(decoder_lock) {}
+        , decoder_lock_(decoder_lock)
+        , tp_(tp) {}
 
-    std::shared_ptr<ppl::common::ThreadTask> Run() override;
+    std::shared_ptr<ThreadTask> Run() override {
+        shared_ptr<void> __unlocker(nullptr, [this](void*) -> void {
+            pthread_mutex_unlock(decoder_lock_);
+        });
 
-private:
-    void FindUData(uint64_t uuid, LLaMAWorker::UuidData* udata, bool should_remove) {
-        pthread_mutex_lock(uuid_data_lock_);
-        auto uuid_data_ref = uuid_data_->find(uuid);
-        if (uuid_data_ref != uuid_data_->end()) {
-            *udata = uuid_data_ref->second;
-            if (should_remove) {
-                uuid_data_->erase(uuid_data_ref);
-            }
+        auto task_list1 = (TidGenTokenTask*)malloc(tid_gen_tokens_->size() * sizeof(TidGenTokenTask));
+        if (!task_list1) {
+            LOG(ERROR) << "allocate TidGenTokenTask failed.";
+            return shared_ptr<ThreadTask>();
         }
-        pthread_mutex_unlock(uuid_data_lock_);
+
+        auto task_list2 = (LastTidGenTokenTask*)malloc(last_tid_gen_tokens_->size() * sizeof(LastTidGenTokenTask));
+        if (!task_list2) {
+            LOG(ERROR) << "allocate LastTidGenTokenTask failed.";
+            free(task_list1);
+            return shared_ptr<ThreadTask>();
+        }
+
+        uint32_t counter = 0;
+        for (auto t = tid_gen_tokens_->begin(); t != tid_gen_tokens_->end(); ++t) {
+            new (task_list1 + counter) TidGenTokenTask(t->first, &t->second, uuid_data_, uuid_data_lock_, tokenizer_);
+            tp_->AddTask(shared_ptr<ThreadTask>(task_list1 + counter, utils::DummyTaskDeleter));
+            ++counter;
+        }
+
+        for (size_t i = 0; i < last_tid_gen_tokens_->size(); ++i) {
+            auto& tid_info = last_tid_gen_tokens_->at(i);
+            new (task_list2 + i)
+                LastTidGenTokenTask(tid_info.tid, &tid_info.gen_tokens, uuid_data_, uuid_data_lock_, tokenizer_);
+            tp_->AddTask(shared_ptr<ThreadTask>(task_list2 + i, utils::DummyTaskDeleter));
+        }
+
+        for (uint32_t i = 0; i < tid_gen_tokens_->size(); ++i) {
+            task_list1[i].Join();
+            task_list1[i].~TidGenTokenTask();
+        }
+        for (uint32_t i = 0; i < last_tid_gen_tokens_->size(); ++i) {
+            task_list2[i].Join();
+            task_list2[i].~LastTidGenTokenTask();
+        }
+
+        free(task_list1);
+        free(task_list2);
+
+        return shared_ptr<ThreadTask>();
     }
 
 private:
@@ -120,58 +253,8 @@ private:
     std::shared_ptr<std::unordered_map<uint64_t, std::vector<int>>> tid_gen_tokens_;
     std::shared_ptr<std::vector<TidGenTokens>> last_tid_gen_tokens_;
     pthread_mutex_t* decoder_lock_;
+    ThreadPool* tp_;
 };
-
-std::shared_ptr<ppl::common::ThreadTask> DecoderThreadTask::Run() {
-    size_t running_batch = tid_gen_tokens_->size() + last_tid_gen_tokens_->size();
-
-    #pragma omp parallel for num_threads(2)
-    for (size_t i = 0; i < running_batch; ++i) {
-        Response rsp;
-        if (i < tid_gen_tokens_->size()) {
-            auto it = tid_gen_tokens_->begin();
-            std::advance(it, i);
-            auto tid = it->first;
-            auto& gen_tokens = it->second;
-            int last_gen_token = gen_tokens.back();
-            const std::string& cur_piece = tokenizer_->IdToPiece(last_gen_token);
-
-            if (gen_tokens.size() != 1 && cur_piece.substr(0, 3) == "▁") { // normal case
-                std::vector<int> new_tokens(gen_tokens.begin(), gen_tokens.end() - 1);
-                tokenizer_->Decode(new_tokens, &rsp.generated);
-                LOG(DEBUG) << "task[" << tid << "] new word: " << rsp.generated;
-                gen_tokens[0] = gen_tokens.back();
-                gen_tokens.resize(1);
-                // send response
-                LLaMAWorker::UuidData udata;
-                FindUData(tid, &udata, false);
-                if (udata.conn) {
-                    rsp.id = udata.req_id;
-                    rsp.flag = Response::NORMAL;
-                    udata.conn->Send(rsp);
-                }
-            }
-        } else { // send last word
-            auto& tid_info = last_tid_gen_tokens_->at(i - tid_gen_tokens_->size());
-            auto tid = tid_info.tid;
-            auto& gen_tokens = tid_info.gen_tokens;
-
-            tokenizer_->Decode(gen_tokens, &rsp.generated);
-            LOG(DEBUG) << "task[" << tid << "] last word: " << rsp.generated;
-
-            LLaMAWorker::UuidData udata;
-            FindUData(tid, &udata, true);
-            if (udata.conn) {
-                rsp.id = udata.req_id;
-                rsp.flag = Response::IS_LAST;
-                udata.conn->Send(rsp);
-            }
-        }
-    }
-
-    pthread_mutex_unlock(decoder_lock_);
-    return shared_ptr<ThreadTask>();
-}
 
 #ifdef PPL_LLM_ENABLE_PROFILING
 static void PrintProfilingMsg(const Profiler& profiler, int step, int running_batch, uint64_t kv_max_blk,
@@ -278,6 +361,7 @@ static bool SaveOutputsOneByOne(const Runtime* runtime, const std::string& tag =
     }
     return true;
 }
+
 static bool SaveInputsOneByOne(const Runtime* runtime, const std::string& tag = "") {
     std::string g_flag_save_data_dir = ".";
 
@@ -329,6 +413,7 @@ LLaMAWorker::LLaMAWorker(const sentencepiece::SentencePieceProcessor* tokenizer,
     : tokenizer_(tokenizer)
     , model_config_(mconfig)
     , worker_config_(wconfig)
+    , device_workers_(resource.device_workers)
     , tensor_parallel_size_(resource.tensor_parallel_size)
     , worker_thread_args_(resource.tensor_parallel_size) {
     pthread_mutex_init(&uuid_data_lock_, nullptr);
@@ -397,19 +482,28 @@ LLaMAWorker::LLaMAWorker(const sentencepiece::SentencePieceProcessor* tokenizer,
 LLaMAWorker::~LLaMAWorker() {
     pthread_mutex_destroy(&uuid_data_lock_);
     pthread_mutex_destroy(&decoder_lock_);
+
+    if (worker_thread_created_) {
+        pthread_cancel(worker_thread_);
+        pthread_join(worker_thread_, nullptr);
+    }
     pthread_cond_destroy(&req_signal_);
-    pthread_mutex_destroy(&lock_for_req_signal_);
 }
 
 RetCode LLaMAWorker::Init() {
-    auto ret = thread_pool_.Init(1);
+    auto ret = thread_pool_.Init(3);
     if (ret != RC_SUCCESS) {
         LOG(ERROR) << "Init Thread Pool error";
         return RC_OTHER_ERROR;
     }
 
-    pthread_mutex_init(&lock_for_req_signal_, nullptr);
     pthread_cond_init(&req_signal_, nullptr);
+    auto err = pthread_create(&worker_thread_, nullptr, WorkerThreadFunc, this);
+    if (err != 0) {
+        LOG(ERROR) << "create worker thread failed.";
+        return RC_OTHER_ERROR;
+    }
+
     return RC_SUCCESS;
 }
 
@@ -457,94 +551,6 @@ void LLaMAWorker::ClearTask(Connection* conn) {
     }
     conn2uuid_.erase(ref);
     pthread_mutex_unlock(&uuid_data_lock_);
-}
-
-RetCode LLaMAWorker::SetInputsTensor(WorkerThreadArg& arg) {
-    RetCode rc;
-
-    // 0. token ids
-    // LOG(INFO) << "token inputs";
-    // PrintVector(worker_controller_.token_inputs);
-    int64_t* token_ids_data = worker_controller_.token_inputs.data();
-    arg.token_ids->GetShape()->Reshape({int64_t(worker_controller_.token_inputs.size())});
-    rc = arg.token_ids->CopyFromHostAsync(token_ids_data);
-    if (rc != RC_SUCCESS) {
-        LOG(ERROR) << "set token_ids [" << arg.token_ids->GetName() << "] failed: " << GetRetCodeStr(rc);
-        return RC_OTHER_ERROR;
-    }
-
-    // 2. seq_start
-    // LOG(INFO) << "seq_starts";
-    // PrintVector(worker_controller_.seq_starts);
-    int64_t* seq_starts_data = worker_controller_.seq_starts.data();
-    arg.seq_starts->GetShape()->Reshape({int64_t(worker_controller_.seq_starts.size())});
-    rc = arg.seq_starts->CopyFromHostAsync(seq_starts_data);
-    if (rc != RC_SUCCESS) {
-        LOG(ERROR) << "set seq_starts [" << arg.seq_starts->GetName() << "] failed: " << GetRetCodeStr(rc);
-        return RC_OTHER_ERROR;
-    }
-
-    // 3. kv_starts
-    // LOG(INFO) << "kv_starts";
-    // PrintVector(worker_controller_.kv_starts);
-    int64_t* kv_starts_data = worker_controller_.kv_starts.data();
-    arg.kv_starts->GetShape()->Reshape({int64_t(worker_controller_.kv_starts.size())});
-    rc = arg.kv_starts->CopyFromHostAsync(kv_starts_data);
-    if (rc != RC_SUCCESS) {
-        LOG(ERROR) << "set kv_starts " << arg.kv_starts->GetName() << " failed: " << GetRetCodeStr(rc);
-        return RC_OTHER_ERROR;
-    }
-
-    // 4. cache_indices
-    // LOG(INFO) << "cache_indices";
-    // PrintVector(worker_controller_.cache_indices);
-    int64_t* cache_indices_data = worker_controller_.cache_indices.data();
-    arg.cache_indices->GetShape()->Reshape({int64_t(worker_controller_.cache_indices.size())});
-    rc = arg.cache_indices->CopyFromHostAsync(cache_indices_data);
-    if (rc != RC_SUCCESS) {
-        LOG(ERROR) << "set cache_indices [" << arg.cache_indices->GetName() << "] failed: " << GetRetCodeStr(rc);
-        return RC_OTHER_ERROR;
-    }
-
-    // 5. decoding batches
-    // LOG(INFO) << "decoding_batches: " << worker_controller_.decoding_batches;
-    int64_t* decoding_batches_data = &worker_controller_.decoding_batches;
-    rc = arg.decoding_batches->CopyFromHostAsync(decoding_batches_data);
-    if (rc != RC_SUCCESS) {
-        LOG(ERROR) << "set decoding_batches [" << arg.decoding_batches->GetName() << "] failed: " << GetRetCodeStr(rc);
-        return RC_OTHER_ERROR;
-    }
-
-    // 6. start_pos
-    // LOG(INFO) << "start_pos";
-    // PrintVector(worker_controller_.start_pos);
-    int64_t* start_pos_data = worker_controller_.start_pos.data();
-    arg.start_pos->GetShape()->Reshape({int64_t(worker_controller_.start_pos.size())});
-    rc = arg.start_pos->CopyFromHostAsync(start_pos_data);
-    if (rc != RC_SUCCESS) {
-        LOG(ERROR) << "set start_pos [" << arg.start_pos->GetName() << "] failed: " << GetRetCodeStr(rc);
-        return RC_OTHER_ERROR;
-    }
-
-    // 7. max_seq_len
-    // LOG(INFO) << "max_seq_len: " << worker_controller_.max_seq_len;
-    int64_t* max_seq_len_data = &worker_controller_.max_seq_len;
-    rc = arg.max_seq_len->CopyFromHostAsync(max_seq_len_data);
-    if (rc != RC_SUCCESS) {
-        LOG(ERROR) << "set max_seq_len [" << arg.max_seq_len->GetName() << "] failed: " << GetRetCodeStr(rc);
-        return RC_OTHER_ERROR;
-    }
-
-    // 8. max_kv_len
-    // LOG(INFO) << "max_kv_len: " << worker_controller_.max_kv_len;
-    int64_t* max_kv_len_data = &worker_controller_.max_kv_len;
-    rc = arg.max_kv_len->CopyFromHostAsync(max_kv_len_data);
-    if (rc != RC_SUCCESS) {
-        LOG(ERROR) << "set max_kv_len [" << arg.max_kv_len->GetName() << "] failed: " << GetRetCodeStr(rc);
-        return RC_OTHER_ERROR;
-    }
-
-    return RC_SUCCESS;
 }
 
 static int RemoveFinishedTask(WorkerController* worker_controller, void* ptr) {
@@ -649,6 +655,121 @@ static void UpdateInput(const std::unordered_map<uint64_t, TidController>& tid_c
     }
 }
 
+class SetInputTask final : public JoinableThreadTask {
+public:
+    SetInputTask(uint32_t id, RetCode* rc, const WorkerController* wc, WorkerThreadArg* arg_list)
+        : id_(id), rc_(rc), wc_(wc), arg_list_(arg_list) {}
+
+protected:
+    bool IsFinished() const override {
+        return is_finished_;
+    }
+    shared_ptr<ThreadTask> Process() override {
+        shared_ptr<void> change_state(nullptr, [this](void*) -> void {
+            is_finished_ = true;
+        });
+
+        // token ids
+        arg_list_[id_].token_ids->GetShape()->Reshape({int64_t(wc_->token_inputs.size())});
+        *rc_ = arg_list_[id_].token_ids->CopyFromHostAsync(wc_->token_inputs.data());
+        if (*rc_ != RC_SUCCESS) {
+            LOG(ERROR) << "set token_ids [" << arg_list_[id_].token_ids->GetName()
+                       << "] failed: " << GetRetCodeStr(*rc_);
+            return shared_ptr<ThreadTask>();
+        }
+
+        // seq_start
+        arg_list_[id_].seq_starts->GetShape()->Reshape({int64_t(wc_->seq_starts.size())});
+        *rc_ = arg_list_[id_].seq_starts->CopyFromHostAsync(wc_->seq_starts.data());
+        if (*rc_ != RC_SUCCESS) {
+            LOG(ERROR) << "set seq_starts [" << arg_list_[id_].seq_starts->GetName()
+                       << "] failed: " << GetRetCodeStr(*rc_);
+            return shared_ptr<ThreadTask>();
+        }
+
+        // kv_starts
+        arg_list_[id_].kv_starts->GetShape()->Reshape({int64_t(wc_->kv_starts.size())});
+        *rc_ = arg_list_[id_].kv_starts->CopyFromHostAsync(wc_->kv_starts.data());
+        if (*rc_ != RC_SUCCESS) {
+            LOG(ERROR) << "set kv_starts " << arg_list_[id_].kv_starts->GetName() << " failed: " << GetRetCodeStr(*rc_);
+            return shared_ptr<ThreadTask>();
+        }
+
+        // cache_indices
+        arg_list_[id_].cache_indices->GetShape()->Reshape({int64_t(wc_->cache_indices.size())});
+        *rc_ = arg_list_[id_].cache_indices->CopyFromHostAsync(wc_->cache_indices.data());
+        if (*rc_ != RC_SUCCESS) {
+            LOG(ERROR) << "set cache_indices [" << arg_list_[id_].cache_indices->GetName()
+                       << "] failed: " << GetRetCodeStr(*rc_);
+            return shared_ptr<ThreadTask>();
+        }
+
+        // decoding batches
+        *rc_ = arg_list_[id_].decoding_batches->CopyFromHostAsync(&wc_->decoding_batches);
+        if (*rc_ != RC_SUCCESS) {
+            LOG(ERROR) << "set decoding_batches [" << arg_list_[id_].decoding_batches->GetName()
+                       << "] failed: " << GetRetCodeStr(*rc_);
+            return shared_ptr<ThreadTask>();
+        }
+
+        // start_pos
+        arg_list_[id_].start_pos->GetShape()->Reshape({int64_t(wc_->start_pos.size())});
+        *rc_ = arg_list_[id_].start_pos->CopyFromHostAsync(wc_->start_pos.data());
+        if (*rc_ != RC_SUCCESS) {
+            LOG(ERROR) << "set start_pos [" << arg_list_[id_].start_pos->GetName()
+                       << "] failed: " << GetRetCodeStr(*rc_);
+            return shared_ptr<ThreadTask>();
+        }
+
+        // max_seq_len
+        *rc_ = arg_list_[id_].max_seq_len->CopyFromHostAsync(&wc_->max_seq_len);
+        if (*rc_ != RC_SUCCESS) {
+            LOG(ERROR) << "set max_seq_len [" << arg_list_[id_].max_seq_len->GetName()
+                       << "] failed: " << GetRetCodeStr(*rc_);
+            return shared_ptr<ThreadTask>();
+        }
+
+        // max_kv_len
+        *rc_ = arg_list_[id_].max_kv_len->CopyFromHostAsync(&wc_->max_kv_len);
+        if (*rc_ != RC_SUCCESS) {
+            LOG(ERROR) << "set max_kv_len [" << arg_list_[id_].max_kv_len->GetName()
+                       << "] failed: " << GetRetCodeStr(*rc_);
+            return shared_ptr<ThreadTask>();
+        }
+
+        *rc_ = arg_list_[id_].resource->runtime->Synchronize();
+        return shared_ptr<ThreadTask>();
+    }
+
+private:
+    bool is_finished_ = false;
+    const uint32_t id_;
+    RetCode* rc_;
+    const WorkerController* wc_;
+    WorkerThreadArg* arg_list_;
+};
+
+class RunModelTask final : public JoinableThreadTask {
+public:
+    RunModelTask(uint32_t id, RetCode* rc, WorkerThreadArg* arg_list) : id_(id), rc_(rc), arg_list_(arg_list) {}
+
+protected:
+    bool IsFinished() const override {
+        return is_finished_;
+    }
+    shared_ptr<ThreadTask> Process() override {
+        *rc_ = arg_list_[id_].resource->runtime->Run();
+        is_finished_ = true;
+        return shared_ptr<ThreadTask>();
+    }
+
+private:
+    bool is_finished_ = false;
+    const uint32_t id_;
+    RetCode* rc_;
+    WorkerThreadArg* arg_list_;
+};
+
 void LLaMAWorker::Work() {
     Profiler profiler;
     worker_controller_.Reset();
@@ -689,93 +810,76 @@ void LLaMAWorker::Work() {
     };
 
     while (true) {
-        // 1. Recv and Parse Requset
+        // Recv and Parse Requset
         auto global_start = std::chrono::high_resolution_clock::now();
 
-        auto local_start = std::chrono::high_resolution_clock::now();
-        if (worker_controller_.tid_list.size() < (size_t)worker_config_.max_running_batch &&
-            cache_cool_down_count <= 0) {
-            while (true) {
-                req = sched_.TryPopRequest(check_func);
-                if (!req) {
-                    break;
+        int running_batch = 0;
+        {
+            utils::TimingGuard __timing__(&profiler.step_prepare_duration);
+            if (worker_controller_.tid_list.size() < (size_t)worker_config_.max_running_batch &&
+                cache_cool_down_count <= 0) {
+                while (true) {
+                    req = sched_.TryPopRequest(check_func);
+                    if (!req) {
+                        break;
+                    }
+
+                    if (!ParseRequest(*req, &tid_controllers)) {
+                        break;
+                    }
+
+                    if (worker_controller_.tid_list.size() >= (size_t)worker_config_.max_running_batch) {
+                        break;
+                    }
                 }
 
-                if (!ParseRequest(*req, &tid_controllers)) {
-                    break;
-                }
-
-                if (worker_controller_.tid_list.size() >= (size_t)worker_config_.max_running_batch) {
+                if (worker_controller_.total_rest_iters == 0) {
                     break;
                 }
             }
 
-            if (worker_controller_.total_rest_iters == 0) {
+            running_batch = worker_controller_.tid_list.size();
+            if (running_batch == 0) {
                 break;
             }
+
+            UpdateInput(tid_controllers, &worker_controller_);
+            profiler.max_running_batch = std::max(running_batch, profiler.max_running_batch);
         }
-
-        int running_batch = worker_controller_.tid_list.size();
-        if (running_batch == 0) {
-            break;
-        }
-
-        UpdateInput(tid_controllers, &worker_controller_);
-
-        profiler.max_running_batch = std::max(running_batch, profiler.max_running_batch);
-        auto local_end = std::chrono::high_resolution_clock::now();
-        profiler.step_prepare_duration =
-            double(std::chrono::duration_cast<std::chrono::microseconds>(local_end - local_start).count()) / 1000.0;
         profiler.prepare_duration += profiler.step_prepare_duration;
 
         LOG(DEBUG) << "Step: " << step << " ---------------------------------";
 
-        // 2. set inputs tensor
-        local_start = std::chrono::high_resolution_clock::now();
-        #pragma omp parallel num_threads(tensor_parallel_size_)
+        // set inputs tensor
         {
-            int thread_id = omp_get_thread_num();
-            auto rc = SetInputsTensor(worker_thread_args_[thread_id]);
+            utils::TimingGuard __timing__(&profiler.step_set_input_duration);
+            auto rc = utils::ParallelExecute<SetInputTask>(device_workers_, tensor_parallel_size_, &worker_controller_,
+                                                           worker_thread_args_.data());
             if (rc != RC_SUCCESS) {
-                LOG(ERROR) << "thread[" << thread_id << "]"
-                           << " SetInputsTensor failed: " << GetRetCodeStr(rc);
-                exit(-1);
+                LOG(ERROR) << "ParallelExecute(SetInputTask) failed.";
+                break;
             }
-            worker_thread_args_[thread_id].resource->runtime->Synchronize();
         }
-        local_end = std::chrono::high_resolution_clock::now();
-        profiler.step_set_input_duration =
-            double(std::chrono::duration_cast<std::chrono::microseconds>(local_end - local_start).count()) / 1000.0;
         profiler.set_input_duration += profiler.step_set_input_duration;
 
-        // 3. model forward
-        local_start = std::chrono::high_resolution_clock::now();
-        #pragma omp parallel num_threads(tensor_parallel_size_)
+        // model forward
         {
-            int thread_id = omp_get_thread_num();
-            RetCode rc;
-            // rc = SetInputsTensor(worker_thread_args_[thread_id]);
-            // if (rc != RC_SUCCESS) {
-            //     LOG(ERROR) << "thread[" << thread_id << "]" << " SetInputsTensor failed: " << GetRetCodeStr(rc);
-            //     exit(-1);
-            // }
-            rc = worker_thread_args_[thread_id].resource->runtime->Run(); // forward
+            utils::TimingGuard __timing__(&profiler.step_model_duration);
+            auto rc = utils::ParallelExecute<RunModelTask>(device_workers_, tensor_parallel_size_,
+                                                           worker_thread_args_.data());
             if (rc != RC_SUCCESS) {
-                LOG(ERROR) << "thread[" << thread_id << "]"
-                           << " runtime->Run() failed: " << GetRetCodeStr(rc);
-                exit(-1);
+                LOG(ERROR) << "ParallelExecute(RunModelTask) failed.";
+                break;
             }
         }
-        local_end = std::chrono::high_resolution_clock::now();
-        profiler.step_model_duration =
-            double(std::chrono::duration_cast<std::chrono::microseconds>(local_end - local_start).count()) / 1000.0;
         profiler.model_duration += profiler.step_model_duration;
 
-        // 4. sampling
-        local_start = std::chrono::high_resolution_clock::now();
-        auto logits = worker_thread_args_[0].logits;
+        // sampling
         std::vector<int32_t> gen_tokens(running_batch);
         {
+            utils::TimingGuard __timing__(&profiler.step_sampling_duration);
+
+            auto logits = worker_thread_args_[0].logits;
             RetCode rc = sampler_->SampleTopPTopK(
                 (float*)logits->GetBufferPtr(), worker_controller_.temperatures.data(), running_batch,
                 model_config_.vocab_size, worker_config_.top_p, worker_config_.top_k, gen_tokens.data());
@@ -784,91 +888,86 @@ void LLaMAWorker::Work() {
                 exit(-1);
             }
         }
-        local_end = std::chrono::high_resolution_clock::now();
-        profiler.sampling_duration +=
-            double(std::chrono::duration_cast<std::chrono::microseconds>(local_end - local_start).count()) / 1000.0;
-        profiler.step_sampling_duration =
-            double(std::chrono::duration_cast<std::chrono::microseconds>(local_end - local_start).count()) / 1000.0;
+        profiler.sampling_duration += profiler.step_sampling_duration;
 
-        // 5. post process
-        local_start = std::chrono::high_resolution_clock::now();
-        profiler.gen_token_cnt += running_batch;
-        for (int task_iter = 0; task_iter < running_batch; ++task_iter) {
-            auto* tid_ctrl = worker_controller_.tid_list[task_iter];
+        // post process
+        {
+            utils::TimingGuard __timing__(&profiler.step_post_process_duration);
 
-            int gen_token = gen_tokens[task_iter];
-            LOG(DEBUG) << "task[" << tid_ctrl->tid << "] gen token: " << gen_token;
+            profiler.gen_token_cnt += running_batch;
+            for (int task_iter = 0; task_iter < running_batch; ++task_iter) {
+                auto* tid_ctrl = worker_controller_.tid_list[task_iter];
 
-            // update tid controller state:
-            tid_ctrl->next_tokens = {gen_token};
-            // update input, worker controller state: start pos, decoding batches
-            if (tid_ctrl->is_first_fill == true) {
-                worker_controller_.start_pos[task_iter] += tid_ctrl->first_fill_len;
-                tid_ctrl->is_first_fill = false;
-                worker_controller_.decoding_batches += 1;
-            } else {
-                worker_controller_.start_pos[task_iter]++;
-            }
+                int gen_token = gen_tokens[task_iter];
+                LOG(DEBUG) << "task[" << tid_ctrl->tid << "] gen token: " << gen_token;
 
-            // update params
-            tid_ctrl->passed_iters++;
-            tid_ctrl->rest_iters--;
+                // update tid controller state:
+                tid_ctrl->next_tokens = {gen_token};
+                // update input, worker controller state: start pos, decoding batches
+                if (tid_ctrl->is_first_fill == true) {
+                    worker_controller_.start_pos[task_iter] += tid_ctrl->first_fill_len;
+                    tid_ctrl->is_first_fill = false;
+                    worker_controller_.decoding_batches += 1;
+                } else {
+                    worker_controller_.start_pos[task_iter]++;
+                }
 
-            // 检测finish: if rest_iters为0或者收到end token
-            if (tid_ctrl->rest_iters <= 0 || gen_token == tokenizer_->eos_id()) {
-                if (cache_cool_down_count > 0)
-                    cache_cool_down_count--;
-                worker_controller_.tid_finished.push_back(tid_ctrl->tid);
+                // update params
+                tid_ctrl->passed_iters++;
+                tid_ctrl->rest_iters--;
+
+                // 检测finish: if rest_iters为0或者收到end token
+                if (tid_ctrl->rest_iters <= 0 || gen_token == tokenizer_->eos_id()) {
+                    if (cache_cool_down_count > 0)
+                        cache_cool_down_count--;
+                    worker_controller_.tid_finished.push_back(tid_ctrl->tid);
+                }
             }
         }
-        local_end = std::chrono::high_resolution_clock::now();
-        profiler.step_post_process_duration =
-            double(std::chrono::duration_cast<std::chrono::microseconds>(local_end - local_start).count()) / 1000.0;
         profiler.post_process_duration += profiler.step_post_process_duration;
 
-        // 6. send stream chat rsp
-        local_start = std::chrono::high_resolution_clock::now();
-        pthread_mutex_lock(&decoder_lock_);
-        auto last_tid_gen_tokens = std::make_shared<std::vector<TidGenTokens>>();
-        for (int task_iter = 0; task_iter < running_batch; ++task_iter) {
-            auto* tid_ctrl = worker_controller_.tid_list[task_iter];
-            int gen_token = gen_tokens[task_iter];
-            auto iter = tid_gen_tokens->emplace(tid_ctrl->tid, std::vector<int>()).first;
-            iter->second.push_back(gen_token);
+        // send stream chat rsp
+        {
+            utils::TimingGuard __timing__(&profiler.step_send_duration);
+            pthread_mutex_lock(&decoder_lock_);
+            auto last_tid_gen_tokens = std::make_shared<std::vector<TidGenTokens>>();
+            for (int task_iter = 0; task_iter < running_batch; ++task_iter) {
+                auto* tid_ctrl = worker_controller_.tid_list[task_iter];
+                int gen_token = gen_tokens[task_iter];
+                auto iter = tid_gen_tokens->emplace(tid_ctrl->tid, std::vector<int>()).first;
+                iter->second.push_back(gen_token);
 
-            // finished task
-            if (tid_ctrl->rest_iters <= 0 || gen_token == tokenizer_->eos_id()) {
-                last_tid_gen_tokens->emplace_back(TidGenTokens(tid_ctrl->tid, iter->second));
-                tid_gen_tokens->erase(iter);
+                // finished task
+                if (tid_ctrl->rest_iters <= 0 || gen_token == tokenizer_->eos_id()) {
+                    last_tid_gen_tokens->emplace_back(TidGenTokens(tid_ctrl->tid, iter->second));
+                    tid_gen_tokens->erase(iter);
+                }
+            }
+
+            auto rc = thread_pool_.AddTask(
+                std::make_shared<DecoderThreadTask>(tokenizer_, &uuid_data_, &uuid_data_lock_, tid_gen_tokens,
+                                                    last_tid_gen_tokens, &decoder_lock_, &thread_pool_));
+            if (rc != RC_SUCCESS) {
+                LOG(ERROR) << "thread_pool_.AddTask() failed: " << GetRetCodeStr(rc);
+                exit(-1);
             }
         }
-
-        auto rc = thread_pool_.AddTask(std::make_shared<DecoderThreadTask>(
-            tokenizer_, &uuid_data_, &uuid_data_lock_, tid_gen_tokens, last_tid_gen_tokens, &decoder_lock_));
-        if (rc != RC_SUCCESS) {
-            LOG(ERROR) << "thread_pool_.AddTask() failed: " << GetRetCodeStr(rc);
-            exit(-1);
-        }
-        local_end = std::chrono::high_resolution_clock::now();
-        profiler.step_send_duration =
-            double(std::chrono::duration_cast<std::chrono::microseconds>(local_end - local_start).count()) / 1000.0;
         profiler.send_duration += profiler.step_send_duration;
 
-        local_start = std::chrono::high_resolution_clock::now();
-        // update iteration
-        step++;
-        worker_controller_.total_rest_iters--;
-        LOG(DEBUG) << "Rest iters: " << worker_controller_.total_rest_iters;
+        {
+            utils::TimingGuard __timing__(&profiler.step_early_finish_duration);
+            // update iteration
+            step++;
+            worker_controller_.total_rest_iters--;
+            LOG(DEBUG) << "Rest iters: " << worker_controller_.total_rest_iters;
 
-        // 6. early finish
-        if (worker_controller_.tid_finished.size() > 0) {
-            LOG(DEBUG) << "Do early finish";
-            profiler.prompt_cnt += worker_controller_.tid_finished.size();
-            DeleteTask(worker_controller_.tid_finished, &tid_controllers);
+            // early finish
+            if (worker_controller_.tid_finished.size() > 0) {
+                LOG(DEBUG) << "Do early finish";
+                profiler.prompt_cnt += worker_controller_.tid_finished.size();
+                DeleteTask(worker_controller_.tid_finished, &tid_controllers);
+            }
         }
-        local_end = std::chrono::high_resolution_clock::now();
-        profiler.step_early_finish_duration =
-            double(std::chrono::duration_cast<std::chrono::microseconds>(local_end - local_start).count()) / 1000.0;
         profiler.early_finish_duration += profiler.step_early_finish_duration;
 
         auto global_end = std::chrono::high_resolution_clock::now();
@@ -902,11 +1001,21 @@ void LLaMAWorker::Process(const shared_ptr<Request>& req, Connection* conn) {
     pthread_cond_signal(&req_signal_);
 }
 
-void LLaMAWorker::Wait() {
-    pthread_mutex_lock(&lock_for_req_signal_);
-    LOG(INFO) << "waiting for request ...";
-    pthread_cond_wait(&req_signal_, &lock_for_req_signal_);
-    pthread_mutex_unlock(&lock_for_req_signal_);
+void* LLaMAWorker::WorkerThreadFunc(void* arg) {
+    auto worker = (LLaMAWorker*)arg;
+    pthread_mutex_t signal_lock;
+    pthread_mutex_init(&signal_lock, nullptr);
+
+    while (true) {
+        pthread_mutex_lock(&signal_lock);
+        LOG(INFO) << "waiting for request ...";
+        pthread_cond_wait(&worker->req_signal_, &signal_lock);
+        pthread_mutex_unlock(&signal_lock);
+        worker->Work();
+    }
+
+    pthread_mutex_destroy(&signal_lock);
+    return nullptr;
 }
 
 }}} // namespace ppl::llm::llama

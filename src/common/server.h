@@ -34,8 +34,6 @@ public:
 class RequestProcessor {
 public:
     virtual ~RequestProcessor() {}
-    virtual void Wait() = 0; // XXX will be removed
-    virtual void Work() = 0; // XXX will be removed
     virtual void Process(const std::shared_ptr<Request>&, Connection*) = 0;
 };
 
