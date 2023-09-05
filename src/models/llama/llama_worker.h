@@ -144,12 +144,6 @@ struct LlamaRequest final {
     std::vector<int> token_id_list;
 };
 
-struct RequestCheckResult final {
-    int64_t cache_index;
-    int rest_iters;
-    int first_fill_len;
-};
-
 class LLaMAWorker final : public RequestProcessor {
 public:
     struct UuidData final {
@@ -174,7 +168,6 @@ public:
 
 private:
     void Work();
-    bool ParseRequest(const LlamaRequest& req, std::unordered_map<uint64_t, TidController>* tid_controllers);
     void DeleteTask(const std::vector<uint64_t>& finished_list,
                     std::unordered_map<uint64_t, TidController>* tid_controllers);
 
@@ -213,8 +206,6 @@ private:
     std::unordered_map<uint64_t, UuidData> uuid_data_;
     std::unordered_map<Connection*, std::vector<uint64_t>> conn2uuid_;
     uint64_t uuid_seq_ = 0;
-
-    RequestCheckResult check_result_;
 };
 
 }}} // namespace ppl::llm::llama
