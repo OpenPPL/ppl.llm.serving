@@ -77,10 +77,10 @@ struct Profiler final {
 };
 
 struct TidGenTokens final {
-    TidGenTokens(uint64_t tid, const std::vector<int>& gen_tokens) : tid(tid), gen_tokens(gen_tokens) {}
+    TidGenTokens(uint64_t id, const vector<int>& tokens) : tid(id), gen_tokens(tokens) {}
 
     uint64_t tid;
-    std::vector<int> gen_tokens;
+    vector<int> gen_tokens;
 };
 
 static void FindUData(unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data, pthread_mutex_t* uuid_data_lock,
@@ -98,9 +98,8 @@ static void FindUData(unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data,
 
 class TidGenTokenTask final : public JoinableThreadTask {
 public:
-    TidGenTokenTask(uint64_t tid, vector<int>* gen_tokens,
-                    std::unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data, pthread_mutex_t* uuid_data_lock,
-                    const sentencepiece::SentencePieceProcessor* tokenizer)
+    TidGenTokenTask(uint64_t tid, vector<int>* gen_tokens, unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data,
+                    pthread_mutex_t* uuid_data_lock, const sentencepiece::SentencePieceProcessor* tokenizer)
         : tid_(tid)
         , gen_tokens_(gen_tokens)
         , uuid_data_(uuid_data)
@@ -114,10 +113,10 @@ protected:
 
     shared_ptr<ThreadTask> Process() override {
         int last_gen_token = gen_tokens_->back();
-        const std::string& cur_piece = tokenizer_->IdToPiece(last_gen_token);
+        const string& cur_piece = tokenizer_->IdToPiece(last_gen_token);
         if (gen_tokens_->size() != 1 && cur_piece.substr(0, 3) == "▁") { // normal case
             Response rsp;
-            std::vector<int> new_tokens(gen_tokens_->begin(), gen_tokens_->end() - 1);
+            vector<int> new_tokens(gen_tokens_->begin(), gen_tokens_->end() - 1);
             tokenizer_->Decode(new_tokens, &rsp.generated);
             LOG(DEBUG) << "task [" << tid_ << "] new word: " << rsp.generated;
             gen_tokens_->at(0) = last_gen_token;
@@ -140,7 +139,7 @@ private:
     bool is_finished_ = false;
     const uint64_t tid_;
     vector<int>* gen_tokens_;
-    std::unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data_;
+    unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data_;
     pthread_mutex_t* uuid_data_lock_;
     const sentencepiece::SentencePieceProcessor* tokenizer_;
 };
@@ -148,7 +147,7 @@ private:
 class LastTidGenTokenTask final : public JoinableThreadTask {
 public:
     LastTidGenTokenTask(uint64_t tid, const vector<int>* gen_tokens,
-                        std::unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data, pthread_mutex_t* uuid_data_lock,
+                        unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data, pthread_mutex_t* uuid_data_lock,
                         const sentencepiece::SentencePieceProcessor* tokenizer)
         : tid_(tid)
         , gen_tokens_(gen_tokens)
@@ -179,7 +178,7 @@ private:
     bool is_finished_ = false;
     const uint64_t tid_;
     const vector<int>* gen_tokens_;
-    std::unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data_;
+    unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data_;
     pthread_mutex_t* uuid_data_lock_;
     const sentencepiece::SentencePieceProcessor* tokenizer_;
 };
@@ -187,10 +186,10 @@ private:
 class DecoderThreadTask final : public ThreadTask {
 public:
     DecoderThreadTask(const sentencepiece::SentencePieceProcessor* tokenizer,
-                      std::unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data, pthread_mutex_t* uuid_data_lock,
-                      const std::shared_ptr<std::unordered_map<uint64_t, std::vector<int>>>& tid_gen_tokens,
-                      const std::shared_ptr<std::vector<TidGenTokens>>& last_tid_gen_tokens,
-                      pthread_mutex_t* decoder_lock, ThreadPool* tp)
+                      unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data, pthread_mutex_t* uuid_data_lock,
+                      const shared_ptr<unordered_map<uint64_t, vector<int>>>& tid_gen_tokens,
+                      const shared_ptr<vector<TidGenTokens>>& last_tid_gen_tokens, pthread_mutex_t* decoder_lock,
+                      ThreadPool* tp)
         : uuid_data_(uuid_data)
         , uuid_data_lock_(uuid_data_lock)
         , tokenizer_(tokenizer)
@@ -199,7 +198,7 @@ public:
         , decoder_lock_(decoder_lock)
         , tp_(tp) {}
 
-    std::shared_ptr<ThreadTask> Run() override {
+    shared_ptr<ThreadTask> Run() override {
         shared_ptr<void> __unlocker(nullptr, [this](void*) -> void {
             pthread_mutex_unlock(decoder_lock_);
         });
@@ -247,11 +246,11 @@ public:
     }
 
 private:
-    std::unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data_;
+    unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data_;
     pthread_mutex_t* uuid_data_lock_;
     const sentencepiece::SentencePieceProcessor* tokenizer_;
-    std::shared_ptr<std::unordered_map<uint64_t, std::vector<int>>> tid_gen_tokens_;
-    std::shared_ptr<std::vector<TidGenTokens>> last_tid_gen_tokens_;
+    shared_ptr<unordered_map<uint64_t, vector<int>>> tid_gen_tokens_;
+    shared_ptr<vector<TidGenTokens>> last_tid_gen_tokens_;
     pthread_mutex_t* decoder_lock_;
     ThreadPool* tp_;
 };
@@ -294,7 +293,7 @@ static void PrintProfilingMsg(const Profiler& profiler, int step, int running_ba
 
 #ifdef PPL_LLM_ENABLE_DEBUG
 template <class T>
-static void PrintVector(std::vector<T> vec) {
+static void PrintVector(vector<T> vec) {
     for (auto& ele : vec) {
         std::cout << ele << ", ";
     }
@@ -329,8 +328,8 @@ static const char* FindDataTypeStr(datatype_t dt) {
     return nullptr;
 }
 
-static bool SaveOutputsOneByOne(const Runtime* runtime, const std::string& tag = "") {
-    std::string g_flag_save_data_dir = ".";
+static bool SaveOutputsOneByOne(const Runtime* runtime, const string& tag = "") {
+    string g_flag_save_data_dir = ".";
     for (uint32_t c = 0; c < runtime->GetOutputCount(); ++c) {
         auto t = runtime->GetOutputTensor(c);
 
@@ -362,8 +361,8 @@ static bool SaveOutputsOneByOne(const Runtime* runtime, const std::string& tag =
     return true;
 }
 
-static bool SaveInputsOneByOne(const Runtime* runtime, const std::string& tag = "") {
-    std::string g_flag_save_data_dir = ".";
+static bool SaveInputsOneByOne(const Runtime* runtime, const string& tag = "") {
+    string g_flag_save_data_dir = ".";
 
     for (uint32_t c = 0; c < runtime->GetInputCount(); ++c) {
         auto t = runtime->GetInputTensor(c);
@@ -374,7 +373,7 @@ static bool SaveInputsOneByOne(const Runtime* runtime, const std::string& tag = 
 
         ppl::nn::TensorShape src_desc = *t->GetShape();
         src_desc.SetDataFormat(DATAFORMAT_NDARRAY);
-        if (std::string(t->GetName()) == "kv_cache" || std::string(t->GetName()) == "kv_scale") {
+        if (string(t->GetName()) == "kv_cache" || string(t->GetName()) == "kv_scale") {
             continue;
         }
 
@@ -515,8 +514,7 @@ struct RequestCheckResult final {
 };
 
 static bool ParseRequest(const LlamaRequest& req, const RequestCheckResult& check_res,
-                         WorkerController* worker_controller,
-                         std::unordered_map<uint64_t, TidController>* tid_controllers) {
+                         WorkerController* worker_controller, unordered_map<uint64_t, TidController>* tid_controllers) {
     if (check_res.rest_iters < 0) {
         req.conn->NotifyFailure(req.orig->id);
         return true;
@@ -582,8 +580,8 @@ static int RemoveFinishedTask(WorkerController* worker_controller, void* ptr) {
     return left;
 }
 
-void LLaMAWorker::DeleteTask(const std::vector<uint64_t>& finished_list,
-                             std::unordered_map<uint64_t, TidController>* tid_controllers) {
+void LLaMAWorker::DeleteTask(const vector<uint64_t>& finished_list,
+                             unordered_map<uint64_t, TidController>* tid_controllers) {
     // process finished task
     for (size_t i = 0; i < finished_list.size(); ++i) {
         auto tid = finished_list[i];
@@ -630,7 +628,7 @@ void LLaMAWorker::DeleteTask(const std::vector<uint64_t>& finished_list,
     RemoveFinishedTask(&worker_controller_, nullptr);
 }
 
-static void UpdateInput(const std::unordered_map<uint64_t, TidController>& tid_controllers,
+static void UpdateInput(const unordered_map<uint64_t, TidController>& tid_controllers,
                         WorkerController* worker_controller) {
     // update input
     int running_batch = worker_controller->tid_list.size();
@@ -783,8 +781,8 @@ void LLaMAWorker::Work() {
     Profiler profiler;
     worker_controller_.Reset();
 
-    std::unordered_map<uint64_t, TidController> tid_controllers;
-    auto tid_gen_tokens = std::make_shared<std::unordered_map<uint64_t, std::vector<int>>>();
+    unordered_map<uint64_t, TidController> tid_controllers;
+    auto tid_gen_tokens = make_shared<unordered_map<uint64_t, vector<int>>>();
 
     long long step = 0;
     int cache_cool_down_count = 0;
@@ -881,7 +879,7 @@ void LLaMAWorker::Work() {
         profiler.model_duration += profiler.step_model_duration;
 
         // sampling
-        std::vector<int32_t> gen_tokens(running_batch);
+        vector<int32_t> gen_tokens(running_batch);
         {
             utils::TimingGuard __timing__(&profiler.step_sampling_duration);
 
@@ -936,11 +934,11 @@ void LLaMAWorker::Work() {
         {
             utils::TimingGuard __timing__(&profiler.step_send_duration);
             pthread_mutex_lock(&decoder_lock_);
-            auto last_tid_gen_tokens = std::make_shared<std::vector<TidGenTokens>>();
+            auto last_tid_gen_tokens = make_shared<vector<TidGenTokens>>();
             for (int task_iter = 0; task_iter < running_batch; ++task_iter) {
                 auto* tid_ctrl = worker_controller_.tid_list[task_iter];
                 int gen_token = gen_tokens[task_iter];
-                auto iter = tid_gen_tokens->emplace(tid_ctrl->tid, std::vector<int>()).first;
+                auto iter = tid_gen_tokens->emplace(tid_ctrl->tid, vector<int>()).first;
                 iter->second.push_back(gen_token);
 
                 // finished task
@@ -950,9 +948,9 @@ void LLaMAWorker::Work() {
                 }
             }
 
-            auto rc = thread_pool_.AddTask(
-                std::make_shared<DecoderThreadTask>(tokenizer_, &uuid_data_, &uuid_data_lock_, tid_gen_tokens,
-                                                    last_tid_gen_tokens, &decoder_lock_, &thread_pool_));
+            auto rc = thread_pool_.AddTask(make_shared<DecoderThreadTask>(tokenizer_, &uuid_data_, &uuid_data_lock_,
+                                                                          tid_gen_tokens, last_tid_gen_tokens,
+                                                                          &decoder_lock_, &thread_pool_));
             if (rc != RC_SUCCESS) {
                 LOG(ERROR) << "thread_pool_.AddTask() failed: " << GetRetCodeStr(rc);
                 break;

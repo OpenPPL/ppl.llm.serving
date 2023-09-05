@@ -40,9 +40,9 @@ using namespace ppl::common;
 using namespace ppl::nn;
 
 struct ServerConfig {
-    std::string model_dir;
-    std::string model_param_path;
-    std::string tokenizer_path;
+    string model_dir;
+    string model_param_path;
+    string tokenizer_path;
 
     int tensor_parallel_size;
 
@@ -53,12 +53,12 @@ struct ServerConfig {
     int max_tokens_per_request;
     int max_running_batch;
 
-    std::string host;
+    string host;
     int port;
 };
 
-bool ParseServerConfig(const std::string& config_file, ServerConfig* server_config) {
-    std::ifstream ifs(config_file);
+bool ParseServerConfig(const string& config_file, ServerConfig* server_config) {
+    ifstream ifs(config_file);
     rapidjson::IStreamWrapper isw(ifs);
     rapidjson::Document json_reader;
     json_reader.ParseStream(isw);
@@ -162,8 +162,8 @@ bool ParseServerConfig(const std::string& config_file, ServerConfig* server_conf
     return true;
 }
 
-bool InitJsonReader(const std::string config_file, rapidjson::Document* document) {
-    std::ifstream ifs(config_file);
+bool InitJsonReader(const string config_file, rapidjson::Document* document) {
+    ifstream ifs(config_file);
     rapidjson::IStreamWrapper isw(ifs);
     document->ParseStream(isw);
     if (document->HasParseError()) {
@@ -173,8 +173,8 @@ bool InitJsonReader(const std::string config_file, rapidjson::Document* document
     return true;
 }
 
-bool ParseModelConfig(const std::string& model_param_path, ModelConfig* model_config) {
-    std::ifstream ifs(model_param_path);
+bool ParseModelConfig(const string& model_param_path, ModelConfig* model_config) {
+    ifstream ifs(model_param_path);
     rapidjson::IStreamWrapper isw(ifs);
     rapidjson::Document document;
     if (document.ParseStream(isw) == false) {
@@ -296,7 +296,7 @@ bool ParseModelConfig(const std::string& model_param_path, ModelConfig* model_co
 
 static RetCode InitNccl(uint32_t tensor_parallel_size, vector<ncclComm_t>* nccl_comm_list) {
     nccl_comm_list->resize(tensor_parallel_size);
-    std::vector<int> dev_list(tensor_parallel_size);
+    vector<int> dev_list(tensor_parallel_size);
     for (size_t i = 0; i < tensor_parallel_size; ++i) {
         dev_list[i] = i;
     }
@@ -512,7 +512,7 @@ shared_ptr<ThreadTask> InitTask::Process() {
     unique_ptr<Runtime> runtime;
     // TODO load models one by one to reduce memory usage
     {
-        const std::string model_path = model_dir_ + "/model_slice_" + std::to_string(id_) + "/model.onnx";
+        const string model_path = model_dir_ + "/model_slice_" + std::to_string(id_) + "/model.onnx";
         LOG(INFO) << "model_slice_" << std::to_string(id_) << ": " << model_path;
         runtime = unique_ptr<Runtime>(CreatePPLRuntime(engine.get(), model_path));
         if (!runtime) {
