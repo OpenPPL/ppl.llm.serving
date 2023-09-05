@@ -166,8 +166,6 @@ public:
     ppl::common::RetCode Init();
     void ClearTask(Connection*);
 
-    void Wait() override;
-    void Work() override;
     void Process(const std::shared_ptr<Request>&, Connection*) override;
 
     void SetSampler(const std::shared_ptr<Sampler>& sampler) {
@@ -175,8 +173,8 @@ public:
     }
 
 private:
+    void Work();
     bool ParseRequest(const LlamaRequest& req, std::unordered_map<uint64_t, TidController>* tid_controllers);
-    ppl::common::RetCode SetInputsTensor(WorkerThreadArg& arg);
     void DeleteTask(const std::vector<uint64_t>& finished_list,
                     std::unordered_map<uint64_t, TidController>* tid_controllers);
 
@@ -188,6 +186,9 @@ private:
 
     ModelConfig model_config_;
     WorkerConfig worker_config_;
+
+    // worker threads bound to specific devices
+    ppl::common::ThreadPool* device_workers_;
 
     int tensor_parallel_size_;
 
@@ -202,7 +203,9 @@ private:
 
     uint64_t kv_cache_max_tokens_;
 
-    pthread_mutex_t lock_for_req_signal_;
+    bool worker_thread_created_ = false;
+    pthread_t worker_thread_;
+
     pthread_cond_t req_signal_;
 
     utils::QueueRequestScheduler<LlamaRequest> sched_;
