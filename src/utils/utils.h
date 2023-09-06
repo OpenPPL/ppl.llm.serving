@@ -30,27 +30,26 @@ inline void DummyTaskDeleter(ppl::common::ThreadTask*) {}
 /**
    @brief TaskType constraints:
      - derived from ppl::common::JoinableThreadTask
-     - has an constructor with parameters (uint32_t id, RetCode* rc, TaskArgType...)
+     - has a constructor with parameters (uint32_t id, TaskArgType...)
+     - has a member function GetRetCode()
  */
 template <typename TaskType, typename... TaskArgType>
 ppl::common::RetCode ParallelExecute(ppl::common::ThreadPool* workers, uint32_t n, TaskArgType&&... rest_args) {
-    std::vector<ppl::common::RetCode> rc_list(n, ppl::common::RC_SUCCESS);
-
     auto task_list = (TaskType*)malloc(n * sizeof(TaskType));
     if (!task_list) {
         return ppl::common::RC_OUT_OF_MEMORY;
     }
 
     for (uint32_t i = 0; i < n; ++i) {
-        new (task_list + i) TaskType(i, &rc_list[i], std::forward<TaskArgType>(rest_args)...);
+        new (task_list + i) TaskType(i, std::forward<TaskArgType>(rest_args)...);
         workers[i].AddTask(std::shared_ptr<ppl::common::ThreadTask>(task_list + i, DummyTaskDeleter));
     }
 
     uint32_t ok_count = 0;
     for (uint32_t i = 0; i < n; ++i) {
         task_list[i].Join();
+        ok_count += (task_list[i].GetRetCode() == ppl::common::RC_SUCCESS);
         task_list[i].~TaskType();
-        ok_count += (rc_list[i] == ppl::common::RC_SUCCESS);
     }
 
     free(task_list);
