@@ -390,17 +390,19 @@ class ResourceManager;
 
 class InitTask final : public JoinableThreadTask {
 public:
-    InitTask(uint32_t id, RetCode* rc, const string& model_dir, uint64_t kv_cache_block_bytes,
-             uint64_t kv_scale_block_bytes, float kv_cache_max_tokens_scale, pthread_barrier_t* alloc_max_mem_barrier,
-             ResourceManager* mgr)
+    InitTask(uint32_t id, const string& model_dir, uint64_t kv_cache_block_bytes, uint64_t kv_scale_block_bytes,
+             float kv_cache_max_tokens_scale, pthread_barrier_t* alloc_max_mem_barrier, ResourceManager* mgr)
         : id_(id)
-        , rc_(rc)
         , model_dir_(model_dir)
         , kv_cache_block_bytes_(kv_cache_block_bytes)
         , kv_scale_block_bytes_(kv_scale_block_bytes)
         , kv_cache_max_tokens_scale_(kv_cache_max_tokens_scale)
         , alloc_max_mem_barrier_(alloc_max_mem_barrier)
         , mgr_(mgr) {}
+
+    inline RetCode GetRetCode() const {
+        return rc_;
+    }
 
 protected:
     bool IsFinished() const override {
@@ -409,15 +411,15 @@ protected:
     shared_ptr<ThreadTask> Process() override;
 
 private:
-    bool is_finished_ = false;
     const uint32_t id_;
-    RetCode* rc_;
     const string& model_dir_;
     const uint64_t kv_cache_block_bytes_;
     const uint64_t kv_scale_block_bytes_;
     const float kv_cache_max_tokens_scale_;
     pthread_barrier_t* alloc_max_mem_barrier_;
     ResourceManager* mgr_;
+    RetCode rc_;
+    bool is_finished_ = false;
 };
 
 struct ResourceManager final {
@@ -504,7 +506,7 @@ shared_ptr<ThreadTask> InitTask::Process() {
     auto engine = unique_ptr<Engine>(CreateCudaEngine(mgr_->nccl_comm_list[id_], id_));
     if (!engine) {
         LOG(ERROR) << "create cuda engine [" << id_ << "] failed.";
-        *rc_ = RC_OTHER_ERROR;
+        rc_ = RC_OTHER_ERROR;
         return shared_ptr<ThreadTask>();
     }
     LOG(INFO) << "create engine [" << id_ << "] success.";
@@ -517,7 +519,7 @@ shared_ptr<ThreadTask> InitTask::Process() {
         runtime = unique_ptr<Runtime>(CreatePPLRuntime(engine.get(), model_path));
         if (!runtime) {
             LOG(ERROR) << "create runtime [" << id_ << "] failed.";
-            *rc_ = RC_OTHER_ERROR;
+            rc_ = RC_OTHER_ERROR;
             return shared_ptr<ThreadTask>();
         }
     }
@@ -546,7 +548,7 @@ shared_ptr<ThreadTask> InitTask::Process() {
     if (cu_ret != cudaSuccess) {
         LOG(ERROR) << "alloc kv cache [" << mgr_->kv_cache_max_tokens * kv_cache_block_bytes_
                    << "] failed: " << cudaGetErrorString(cu_ret);
-        *rc_ = RC_OTHER_ERROR;
+        rc_ = RC_OTHER_ERROR;
         return shared_ptr<ThreadTask>();
     }
     cu_ret = cudaMalloc(&item.kv_scale_mem, mgr_->kv_cache_max_tokens * kv_scale_block_bytes_);
@@ -554,13 +556,14 @@ shared_ptr<ThreadTask> InitTask::Process() {
         cudaFree(item.kv_cache_mem);
         LOG(ERROR) << "alloc kv scale [" << mgr_->kv_cache_max_tokens * kv_scale_block_bytes_
                    << "] failed: " << cudaGetErrorString(cu_ret);
-        *rc_ = RC_OTHER_ERROR;
+        rc_ = RC_OTHER_ERROR;
         return shared_ptr<ThreadTask>();
     }
     item.runtime = runtime.release();
 
     mgr_->items[id_] = item;
 
+    rc_ = RC_SUCCESS;
     return shared_ptr<ThreadTask>();
 }
 

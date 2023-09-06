@@ -234,12 +234,12 @@ public:
             task_list1[i].Join();
             task_list1[i].~TidGenTokenTask();
         }
+        free(task_list1);
+
         for (uint32_t i = 0; i < last_tid_gen_tokens_->size(); ++i) {
             task_list2[i].Join();
             task_list2[i].~LastTidGenTokenTask();
         }
-
-        free(task_list1);
         free(task_list2);
 
         return shared_ptr<ThreadTask>();
@@ -674,8 +674,12 @@ static void UpdateInput(const unordered_map<uint64_t, TidController>& tid_contro
 
 class SetInputTask final : public JoinableThreadTask {
 public:
-    SetInputTask(uint32_t id, RetCode* rc, const WorkerController* wc, WorkerThreadArg* arg_list)
-        : id_(id), rc_(rc), wc_(wc), arg_list_(arg_list) {}
+    SetInputTask(uint32_t id, const WorkerController* wc, WorkerThreadArg* arg_list)
+        : id_(id), wc_(wc), arg_list_(arg_list) {}
+
+    inline RetCode GetRetCode() const {
+        return rc_;
+    }
 
 protected:
     bool IsFinished() const override {
@@ -688,103 +692,107 @@ protected:
 
         // token ids
         arg_list_[id_].token_ids->GetShape()->Reshape({int64_t(wc_->token_inputs.size())});
-        *rc_ = arg_list_[id_].token_ids->CopyFromHostAsync(wc_->token_inputs.data());
-        if (*rc_ != RC_SUCCESS) {
+        rc_ = arg_list_[id_].token_ids->CopyFromHostAsync(wc_->token_inputs.data());
+        if (rc_ != RC_SUCCESS) {
             LOG(ERROR) << "set token_ids [" << arg_list_[id_].token_ids->GetName()
-                       << "] failed: " << GetRetCodeStr(*rc_);
+                       << "] failed: " << GetRetCodeStr(rc_);
             return shared_ptr<ThreadTask>();
         }
 
         // seq_start
         arg_list_[id_].seq_starts->GetShape()->Reshape({int64_t(wc_->seq_starts.size())});
-        *rc_ = arg_list_[id_].seq_starts->CopyFromHostAsync(wc_->seq_starts.data());
-        if (*rc_ != RC_SUCCESS) {
+        rc_ = arg_list_[id_].seq_starts->CopyFromHostAsync(wc_->seq_starts.data());
+        if (rc_ != RC_SUCCESS) {
             LOG(ERROR) << "set seq_starts [" << arg_list_[id_].seq_starts->GetName()
-                       << "] failed: " << GetRetCodeStr(*rc_);
+                       << "] failed: " << GetRetCodeStr(rc_);
             return shared_ptr<ThreadTask>();
         }
 
         // kv_starts
         arg_list_[id_].kv_starts->GetShape()->Reshape({int64_t(wc_->kv_starts.size())});
-        *rc_ = arg_list_[id_].kv_starts->CopyFromHostAsync(wc_->kv_starts.data());
-        if (*rc_ != RC_SUCCESS) {
-            LOG(ERROR) << "set kv_starts " << arg_list_[id_].kv_starts->GetName() << " failed: " << GetRetCodeStr(*rc_);
+        rc_ = arg_list_[id_].kv_starts->CopyFromHostAsync(wc_->kv_starts.data());
+        if (rc_ != RC_SUCCESS) {
+            LOG(ERROR) << "set kv_starts " << arg_list_[id_].kv_starts->GetName() << " failed: " << GetRetCodeStr(rc_);
             return shared_ptr<ThreadTask>();
         }
 
         // cache_indices
         arg_list_[id_].cache_indices->GetShape()->Reshape({int64_t(wc_->cache_indices.size())});
-        *rc_ = arg_list_[id_].cache_indices->CopyFromHostAsync(wc_->cache_indices.data());
-        if (*rc_ != RC_SUCCESS) {
+        rc_ = arg_list_[id_].cache_indices->CopyFromHostAsync(wc_->cache_indices.data());
+        if (rc_ != RC_SUCCESS) {
             LOG(ERROR) << "set cache_indices [" << arg_list_[id_].cache_indices->GetName()
-                       << "] failed: " << GetRetCodeStr(*rc_);
+                       << "] failed: " << GetRetCodeStr(rc_);
             return shared_ptr<ThreadTask>();
         }
 
         // decoding batches
-        *rc_ = arg_list_[id_].decoding_batches->CopyFromHostAsync(&wc_->decoding_batches);
-        if (*rc_ != RC_SUCCESS) {
+        rc_ = arg_list_[id_].decoding_batches->CopyFromHostAsync(&wc_->decoding_batches);
+        if (rc_ != RC_SUCCESS) {
             LOG(ERROR) << "set decoding_batches [" << arg_list_[id_].decoding_batches->GetName()
-                       << "] failed: " << GetRetCodeStr(*rc_);
+                       << "] failed: " << GetRetCodeStr(rc_);
             return shared_ptr<ThreadTask>();
         }
 
         // start_pos
         arg_list_[id_].start_pos->GetShape()->Reshape({int64_t(wc_->start_pos.size())});
-        *rc_ = arg_list_[id_].start_pos->CopyFromHostAsync(wc_->start_pos.data());
-        if (*rc_ != RC_SUCCESS) {
+        rc_ = arg_list_[id_].start_pos->CopyFromHostAsync(wc_->start_pos.data());
+        if (rc_ != RC_SUCCESS) {
             LOG(ERROR) << "set start_pos [" << arg_list_[id_].start_pos->GetName()
-                       << "] failed: " << GetRetCodeStr(*rc_);
+                       << "] failed: " << GetRetCodeStr(rc_);
             return shared_ptr<ThreadTask>();
         }
 
         // max_seq_len
-        *rc_ = arg_list_[id_].max_seq_len->CopyFromHostAsync(&wc_->max_seq_len);
-        if (*rc_ != RC_SUCCESS) {
+        rc_ = arg_list_[id_].max_seq_len->CopyFromHostAsync(&wc_->max_seq_len);
+        if (rc_ != RC_SUCCESS) {
             LOG(ERROR) << "set max_seq_len [" << arg_list_[id_].max_seq_len->GetName()
-                       << "] failed: " << GetRetCodeStr(*rc_);
+                       << "] failed: " << GetRetCodeStr(rc_);
             return shared_ptr<ThreadTask>();
         }
 
         // max_kv_len
-        *rc_ = arg_list_[id_].max_kv_len->CopyFromHostAsync(&wc_->max_kv_len);
-        if (*rc_ != RC_SUCCESS) {
+        rc_ = arg_list_[id_].max_kv_len->CopyFromHostAsync(&wc_->max_kv_len);
+        if (rc_ != RC_SUCCESS) {
             LOG(ERROR) << "set max_kv_len [" << arg_list_[id_].max_kv_len->GetName()
-                       << "] failed: " << GetRetCodeStr(*rc_);
+                       << "] failed: " << GetRetCodeStr(rc_);
             return shared_ptr<ThreadTask>();
         }
 
-        *rc_ = arg_list_[id_].resource->runtime->Synchronize();
+        rc_ = arg_list_[id_].resource->runtime->Synchronize();
         return shared_ptr<ThreadTask>();
     }
 
 private:
-    bool is_finished_ = false;
     const uint32_t id_;
-    RetCode* rc_;
     const WorkerController* wc_;
     WorkerThreadArg* arg_list_;
+    RetCode rc_;
+    bool is_finished_ = false;
 };
 
 class RunModelTask final : public JoinableThreadTask {
 public:
-    RunModelTask(uint32_t id, RetCode* rc, WorkerThreadArg* arg_list) : id_(id), rc_(rc), arg_list_(arg_list) {}
+    RunModelTask(uint32_t id, WorkerThreadArg* arg_list) : id_(id), arg_list_(arg_list) {}
+
+    inline RetCode GetRetCode() const {
+        return rc_;
+    }
 
 protected:
     bool IsFinished() const override {
         return is_finished_;
     }
     shared_ptr<ThreadTask> Process() override {
-        *rc_ = arg_list_[id_].resource->runtime->Run();
+        rc_ = arg_list_[id_].resource->runtime->Run();
         is_finished_ = true;
         return shared_ptr<ThreadTask>();
     }
 
 private:
-    bool is_finished_ = false;
     const uint32_t id_;
-    RetCode* rc_;
     WorkerThreadArg* arg_list_;
+    RetCode rc_;
+    bool is_finished_ = false;
 };
 
 void LLaMAWorker::Work() {
