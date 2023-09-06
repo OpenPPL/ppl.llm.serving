@@ -565,8 +565,7 @@ void LLaMAWorker::ClearTask(Connection* conn) {
         pthread_mutex_unlock(&uuid_data_lock_);
         return;
     }
-    auto& conn_uuid_list = ref->second;
-    for (auto x = conn_uuid_list.begin(); x != conn_uuid_list.end(); ++x) {
+    for (auto x = ref->second.begin(); x != ref->second.end(); ++x) {
         uuid_data_.erase(*x);
     }
     conn2uuid_.erase(ref);
