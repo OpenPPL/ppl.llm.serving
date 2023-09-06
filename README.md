@@ -2,7 +2,7 @@
 
 ## Overview
 
-`ppl.llm.serving` is a serving based on [ppl.nn.llm](https://github.com/openppl-public/ppl.nn.llm) for various Large Language Models(LLMs). This repository contains a server based on gRPC and inference support for [Llama](https://github.com/facebookresearch/llama).
+`ppl.llm.serving` is a serving based on [ppl.nn.llm](https://github.com/openppl-public/ppl.nn.llm) for various Large Language Models(LLMs). This repository contains a server based on gRPC and inference support for [LLaMA](https://github.com/facebookresearch/llama).
 
 ## Prerequisites
 
@@ -49,20 +49,22 @@
     - `model_dir`: path of models exported by [ppl.pmx](https://github.com/openppl-public/ppl.pmx).
     - `model_param_path`: params of models. `$model_dir/params.json`.
     - `tokenizer_path`: tokenizer files for `sentencepiece`.
-
-* Benchmarking
-
-    You can use various clients to send requests to the server:
+    
+* Running client: send request through gRPC to query the model
 
     ```bash
-    ./client_sample 127.0.0.1:23333
+    ./ppl-build/client_sample 127.0.0.1:23333
     ```
+    See [tools/client_sample.cc](tools/client_sample.cc) for more details.
 
-    or
+* Benchmarking
 
     ```bash
     ./ppl-build/client_qps_measure 127.0.0.1:23333 /path/to/tokenizer/path tools/samples_1024.json
     ```
+    See [tools/client_qps_measure.cc](tools/client_qps_measure.cc) for more details.
+
+Refer to [Documentation](docs/) for more details.
 
 ### License
 
