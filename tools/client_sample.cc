@@ -99,12 +99,17 @@ int main(int argc, char** argv) {
 
     GenerationClient generator(grpc::CreateChannel(target_str, grpc::InsecureChannelCredentials()));
 
-
     std::string prompt = "Building a website can be done in 10 simple steps:\n";
     const std::vector<std::string> prompts = {3, prompt};
 
-  std::cout << "Question: -----------------" << std::endl;
-  for (auto& str : prompts)     std::cout << str << std::endl;
-  generator.Generation(prompts);
-  return 0;
+    std::cout << "------------------------------" << std::endl;
+    std::cout << "--------- Question -------------" << std::endl;
+    std::cout << "------------------------------" << std::endl;
+
+    for (auto& str : prompts) {
+        std::cout << str << std::endl;
+    }
+
+    generator.Generation(prompts);
+    return 0;
 }
