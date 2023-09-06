@@ -56,9 +56,9 @@ struct Profiler final {
     int gen_token_cnt = 0;
 
     int max_running_batch = 0;
+    int pending_task_size = 0;
 
     double prepare_duration = 0;
-    double post_process_duration = 0;
     double model_duration = 0;
     double sampling_duration = 0;
     double total_duration = 0;
@@ -67,7 +67,6 @@ struct Profiler final {
     double early_finish_duration = 0;
 
     double step_prepare_duration = 0;
-    double step_post_process_duration = 0;
     double step_set_input_duration = 0;
     double step_model_duration = 0;
     double step_sampling_duration = 0;
@@ -99,12 +98,14 @@ static void FindUData(unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data,
 class TidGenTokenTask final : public JoinableThreadTask {
 public:
     TidGenTokenTask(uint64_t tid, vector<int>* gen_tokens, unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data,
-                    pthread_mutex_t* uuid_data_lock, const sentencepiece::SentencePieceProcessor* tokenizer)
+                    pthread_mutex_t* uuid_data_lock, const sentencepiece::SentencePieceProcessor* tokenizer,
+                    unordered_set<uint64_t>* tid_shutdown)
         : tid_(tid)
         , gen_tokens_(gen_tokens)
         , uuid_data_(uuid_data)
         , uuid_data_lock_(uuid_data_lock)
-        , tokenizer_(tokenizer) {}
+        , tokenizer_(tokenizer)
+        , tid_shutdown_(tid_shutdown) {}
 
 protected:
     bool IsFinished() const override {
@@ -128,7 +129,8 @@ protected:
                 rsp.id = udata.req_id;
                 rsp.flag = Response::NORMAL;
                 udata.conn->Send(rsp);
-            }
+            } else
+                tid_shutdown_->insert(tid_);
         }
 
         is_finished_ = true;
@@ -142,6 +144,7 @@ private:
     unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data_;
     pthread_mutex_t* uuid_data_lock_;
     const sentencepiece::SentencePieceProcessor* tokenizer_;
+    unordered_set<uint64_t>* tid_shutdown_;
 };
 
 class LastTidGenTokenTask final : public JoinableThreadTask {
@@ -189,14 +192,15 @@ public:
                       unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data, pthread_mutex_t* uuid_data_lock,
                       const shared_ptr<unordered_map<uint64_t, vector<int>>>& tid_gen_tokens,
                       const shared_ptr<vector<TidGenTokens>>& last_tid_gen_tokens, pthread_mutex_t* decoder_lock,
-                      ThreadPool* tp)
+                      ThreadPool* tp, unordered_set<uint64_t>* tid_shutdown)
         : uuid_data_(uuid_data)
         , uuid_data_lock_(uuid_data_lock)
         , tokenizer_(tokenizer)
         , tid_gen_tokens_(tid_gen_tokens)
         , last_tid_gen_tokens_(last_tid_gen_tokens)
         , decoder_lock_(decoder_lock)
-        , tp_(tp) {}
+        , tp_(tp)
+        , tid_shutdown_(tid_shutdown) {}
 
     shared_ptr<ThreadTask> Run() override {
         shared_ptr<void> __unlocker(nullptr, [this](void*) -> void {
@@ -218,7 +222,8 @@ public:
 
         uint32_t counter = 0;
         for (auto t = tid_gen_tokens_->begin(); t != tid_gen_tokens_->end(); ++t) {
-            new (task_list1 + counter) TidGenTokenTask(t->first, &t->second, uuid_data_, uuid_data_lock_, tokenizer_);
+            new (task_list1 + counter)
+                TidGenTokenTask(t->first, &t->second, uuid_data_, uuid_data_lock_, tokenizer_, tid_shutdown_);
             tp_->AddTask(shared_ptr<ThreadTask>(task_list1 + counter, utils::DummyTaskDeleter));
             ++counter;
         }
@@ -253,6 +258,7 @@ private:
     shared_ptr<vector<TidGenTokens>> last_tid_gen_tokens_;
     pthread_mutex_t* decoder_lock_;
     ThreadPool* tp_;
+    unordered_set<uint64_t>* tid_shutdown_;
 };
 
 #ifdef PPL_LLM_ENABLE_PROFILING
@@ -262,6 +268,7 @@ static void PrintProfilingMsg(const Profiler& profiler, int step, int running_ba
     fprintf(stderr, "[PERF]  |- ");
     ::PrintMemUsage();
     fprintf(stderr, "[PERF]  |- kv cache usage: %.2f %%\n", (1.0f - (double)kv_rest_blk / kv_max_blk) * 100.0);
+    fprintf(stderr, "[PERF]  |- pending task number: %d\n", profiler.pending_task_size);
     fprintf(stderr, "[PERF]  |- running batch: %d, max running batch: %d\n", running_batch, profiler.max_running_batch);
     fprintf(stderr, "[PERF]  |- finished query count: %d, QPS: %.2f\n", profiler.prompt_cnt,
             float(profiler.prompt_cnt) / profiler.total_duration * 1000);
@@ -279,8 +286,6 @@ static void PrintProfilingMsg(const Profiler& profiler, int step, int running_ba
             profiler.step_model_duration, profiler.model_duration / step, profiler.model_duration);
     fprintf(stderr, "[PERF]  |-- sampling         | cur: %.2f ms, | avg: %.2f ms, | total: %.2f ms\n",
             profiler.step_sampling_duration, profiler.sampling_duration / step, profiler.sampling_duration);
-    fprintf(stderr, "[PERF]  |-- increase next    | cur: %.2f ms, | avg: %.2f ms, | total: %.2f ms\n",
-            profiler.step_post_process_duration, profiler.post_process_duration / step, profiler.post_process_duration);
     fprintf(stderr, "[PERF]  |-- send response    | cur: %.2f ms, | avg: %.2f ms, | total: %.2f ms\n",
             profiler.step_send_duration, profiler.send_duration / step, profiler.send_duration);
     fprintf(stderr, "[PERF]  |-- early finish     | cur: %.2f ms, | avg: %.2f ms, | total: %.2f ms\n",
@@ -499,8 +504,7 @@ RetCode LLaMAWorker::Init() {
         LOG(ERROR) << "CheckParameters failed.";
         return ret;
     }
-
-    ret = thread_pool_.Init(3);
+    ret = decoder_thread_pool_.Init(3);
     if (ret != RC_SUCCESS) {
         LOG(ERROR) << "Init Thread Pool error";
         return RC_OTHER_ERROR;
@@ -538,7 +542,6 @@ static bool ParseRequest(const LlamaRequest& req, const RequestCheckResult& chec
     auto tid = req.uuid;
     auto& tid_ctrl = tid_controllers->emplace(tid, TidController()).first->second;
     tid_ctrl.tid = tid;
-    tid_ctrl.prompt = req.orig->prompt;
     tid_ctrl.temperature = req.orig->temperature;
     tid_ctrl.rest_iters = check_res.rest_iters;
     tid_ctrl.first_fill_len = check_res.first_fill_len;
@@ -562,7 +565,6 @@ void LLaMAWorker::ClearTask(Connection* conn) {
         pthread_mutex_unlock(&uuid_data_lock_);
         return;
     }
-    auto conn_uuid_list = ref->second;
     for (auto x = ref->second.begin(); x != ref->second.end(); ++x) {
         uuid_data_.erase(*x);
     }
@@ -914,42 +916,6 @@ void LLaMAWorker::Work() {
         }
         profiler.sampling_duration += profiler.step_sampling_duration;
 
-        // post process
-        {
-            utils::TimingGuard __timing__(&profiler.step_post_process_duration);
-
-            profiler.gen_token_cnt += running_batch;
-            for (int task_iter = 0; task_iter < running_batch; ++task_iter) {
-                auto* tid_ctrl = worker_controller_.tid_list[task_iter];
-
-                int gen_token = gen_tokens[task_iter];
-                LOG(DEBUG) << "task[" << tid_ctrl->tid << "] gen token: " << gen_token;
-
-                // update tid controller state:
-                tid_ctrl->next_tokens = {gen_token};
-                // update input, worker controller state: start pos, decoding batches
-                if (tid_ctrl->is_first_fill == true) {
-                    worker_controller_.start_pos[task_iter] += tid_ctrl->first_fill_len;
-                    tid_ctrl->is_first_fill = false;
-                    worker_controller_.decoding_batches += 1;
-                } else {
-                    worker_controller_.start_pos[task_iter]++;
-                }
-
-                // update params
-                tid_ctrl->passed_iters++;
-                tid_ctrl->rest_iters--;
-
-                // 检测finish: if rest_iters为0或者收到end token
-                if (tid_ctrl->rest_iters <= 0 || gen_token == tokenizer_->eos_id()) {
-                    if (cache_cool_down_count > 0)
-                        cache_cool_down_count--;
-                    worker_controller_.tid_finished.push_back(tid_ctrl->tid);
-                }
-            }
-        }
-        profiler.post_process_duration += profiler.step_post_process_duration;
-
         // send stream chat rsp
         {
             utils::TimingGuard __timing__(&profiler.step_send_duration);
@@ -958,21 +924,39 @@ void LLaMAWorker::Work() {
             for (int task_iter = 0; task_iter < running_batch; ++task_iter) {
                 auto* tid_ctrl = worker_controller_.tid_list[task_iter];
                 int gen_token = gen_tokens[task_iter];
+                LOG(DEBUG) << "task[" << tid_ctrl->tid << "] gen token: " << gen_token;
+                tid_ctrl->next_tokens = {gen_token};
+                if (tid_ctrl->is_first_fill == true) {
+                    worker_controller_.start_pos[task_iter] += tid_ctrl->first_fill_len;
+                    tid_ctrl->is_first_fill = false;
+                    worker_controller_.decoding_batches += 1;
+                } else {
+                    worker_controller_.start_pos[task_iter]++;
+                }
+                // update params
+                tid_ctrl->passed_iters++;
+                tid_ctrl->rest_iters--;
+
                 auto iter = tid_gen_tokens->emplace(tid_ctrl->tid, vector<int>()).first;
                 iter->second.push_back(gen_token);
 
                 // finished task
-                if (tid_ctrl->rest_iters <= 0 || gen_token == tokenizer_->eos_id()) {
+                if (tid_ctrl->rest_iters <= 0 || gen_token == tokenizer_->eos_id() ||
+                    worker_controller_.tid_shutdown.find(tid_ctrl->tid) != worker_controller_.tid_shutdown.end()) {
                     last_tid_gen_tokens->emplace_back(TidGenTokens(tid_ctrl->tid, iter->second));
                     tid_gen_tokens->erase(iter);
+                    if (cache_cool_down_count > 0)
+                        cache_cool_down_count--;
+                    worker_controller_.tid_finished.push_back(tid_ctrl->tid);
                 }
             }
+            worker_controller_.tid_shutdown.clear();
 
-            rc = thread_pool_.AddTask(make_shared<DecodeAndSendTask>(tokenizer_, &uuid_data_, &uuid_data_lock_,
-                                                                     tid_gen_tokens, last_tid_gen_tokens,
-                                                                     &decoder_lock_, &thread_pool_));
+            auto rc = decoder_thread_pool_.AddTask(make_shared<DecodeAndSendTask>(
+                tokenizer_, &uuid_data_, &uuid_data_lock_, tid_gen_tokens, last_tid_gen_tokens, &decoder_lock_,
+                &decoder_thread_pool_, &worker_controller_.tid_shutdown));
             if (rc != RC_SUCCESS) {
-                LOG(ERROR) << "thread_pool_.AddTask() failed: " << GetRetCodeStr(rc);
+                LOG(ERROR) << "decoder_thread_pool_.AddTask() failed: " << GetRetCodeStr(rc);
                 break;
             }
         }
@@ -998,6 +982,7 @@ void LLaMAWorker::Work() {
         profiler.step_total_duration =
             double(std::chrono::duration_cast<std::chrono::microseconds>(global_end - global_start).count()) / 1000.0;
         profiler.total_duration += profiler.step_total_duration;
+        profiler.pending_task_size = sched_.GetPendingSize();
 
 #ifdef PPL_LLM_ENABLE_PROFILING
         if (step % 100 == 0 || worker_controller_.total_rest_iters == 0) {

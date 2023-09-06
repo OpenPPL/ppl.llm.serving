@@ -58,17 +58,17 @@ public:
 
         if (queues_[consumer_queue_index_].empty()) {
             pthread_mutex_lock(&switch_queue_lock_);
-            auto next_idx = 1 - consumer_queue_index_;
-            if (!queues_[next_idx].empty()) {
-                consumer_queue_index_ = next_idx;
-                req = queues_[next_idx].front();
+            consumer_queue_index_ = 1 - consumer_queue_index_;
+            pthread_mutex_unlock(&switch_queue_lock_);
+
+            if (!queues_[consumer_queue_index_].empty()) {
+                req = queues_[consumer_queue_index_].front();
                 if (check_req_func(*req)) {
-                    queues_[next_idx].pop();
+                    queues_[consumer_queue_index_].pop();
                 } else {
                     req.reset();
                 }
             }
-            pthread_mutex_unlock(&switch_queue_lock_);
         } else {
             req = queues_[consumer_queue_index_].front();
             if (check_req_func(*req)) {
@@ -79,6 +79,10 @@ public:
         }
 
         return req;
+    }
+
+    uint32_t GetPendingSize() const {
+        return queues_[0].size() + queues_[1].size();
     }
 
 private:
