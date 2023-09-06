@@ -167,6 +167,7 @@ public:
     }
 
 private:
+    ppl::common::RetCode CheckParameters() const;
     void Work();
     void DeleteTask(const std::vector<uint64_t>& finished_list,
                     std::unordered_map<uint64_t, TidController>* tid_controllers);

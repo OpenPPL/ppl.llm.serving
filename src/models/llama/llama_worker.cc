@@ -407,6 +407,30 @@ static bool SaveInputsOneByOne(const Runtime* runtime, const string& tag = "") {
 }
 #endif
 
+RetCode LLaMAWorker::CheckParameters() const {
+    if (model_config_.auto_causal != true) {
+        LOG(ERROR) << "only support auto_causal == true";
+        return RC_INVALID_VALUE;
+    }
+
+    if (model_config_.cache_layout != 0 && model_config_.cache_mode != 0) {
+        LOG(ERROR) << "only support cache_layout == 0 and cache_mode == 0";
+        return RC_INVALID_VALUE;
+    }
+
+    if (model_config_.cache_quant_bit != 8 && model_config_.cache_quant_group != 8) {
+        LOG(ERROR) << "only support cache_quant_bit == 8 and cache_quant_group == 8";
+        return RC_INVALID_VALUE;
+    }
+
+    if (model_config_.dynamic_batching != true) {
+        LOG(ERROR) << "only support dynamic_batching == true";
+        return RC_INVALID_VALUE;
+    }
+
+    return RC_SUCCESS;
+}
+
 LLaMAWorker::LLaMAWorker(const sentencepiece::SentencePieceProcessor* tokenizer, const Resource& resource,
                          const ModelConfig& mconfig, const WorkerConfig& wconfig)
     : tokenizer_(tokenizer)
@@ -416,26 +440,6 @@ LLaMAWorker::LLaMAWorker(const sentencepiece::SentencePieceProcessor* tokenizer,
     , tensor_parallel_size_(resource.tensor_parallel_size)
     , worker_thread_args_(resource.tensor_parallel_size) {
     pthread_mutex_init(&uuid_data_lock_, nullptr);
-
-    if (model_config_.auto_causal != true) {
-        LOG(ERROR) << "only support auto_causal == true";
-        exit(-1);
-    }
-
-    if (model_config_.cache_layout != 0 && model_config_.cache_mode != 0) {
-        LOG(ERROR) << "only support cache_layout == 0 and cache_mode == 0";
-        exit(-1);
-    }
-
-    if (model_config_.cache_quant_bit != 8 && model_config_.cache_quant_group != 8) {
-        LOG(ERROR) << "only support cache_quant_bit == 8 and cache_quant_group == 8";
-        exit(-1);
-    }
-
-    if (model_config_.dynamic_batching != true) {
-        LOG(ERROR) << "only support dynamic_batching == true";
-        exit(-1);
-    }
 
     kv_cache_max_tokens_ = resource.kv_cache_max_tokens;
 
@@ -490,7 +494,13 @@ LLaMAWorker::~LLaMAWorker() {
 }
 
 RetCode LLaMAWorker::Init() {
-    auto ret = thread_pool_.Init(3);
+    auto ret = CheckParameters();
+    if (ret != RC_SUCCESS) {
+        LOG(ERROR) << "CheckParameters failed.";
+        return ret;
+    }
+
+    ret = thread_pool_.Init(3);
     if (ret != RC_SUCCESS) {
         LOG(ERROR) << "Init Thread Pool error";
         return RC_OTHER_ERROR;
