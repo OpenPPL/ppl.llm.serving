@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#ifndef __PPL_LLM_INDEX_MANAGER_H__
-#define __PPL_LLM_INDEX_MANAGER_H__
+#ifndef __PPL_LLM_UTILS_INDEX_MANAGER_H__
+#define __PPL_LLM_UTILS_INDEX_MANAGER_H__
 
 #include "ppl/common/compact_addr_manager.h"
 
-namespace ppl { namespace llm {
+namespace ppl { namespace llm { namespace utils {
 
 class IndexManager final {
 private:
@@ -77,6 +77,6 @@ private:
     ppl::common::CompactAddrManager mgr_;
 };
 
-}} // namespace ppl::llm
+}}} // namespace ppl::llm::utils
 
 #endif

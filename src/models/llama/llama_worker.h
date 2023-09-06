@@ -192,7 +192,7 @@ private:
     ppl::common::ThreadPool thread_pool_;
     pthread_mutex_t decoder_lock_;
 
-    IndexManager idx_mgr_;
+    utils::IndexManager idx_mgr_;
     std::shared_ptr<Sampler> sampler_;
 
     uint64_t kv_cache_max_tokens_;

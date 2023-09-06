@@ -183,9 +183,9 @@ private:
     const sentencepiece::SentencePieceProcessor* tokenizer_;
 };
 
-class DecoderThreadTask final : public ThreadTask {
+class DecodeAndSendTask final : public ThreadTask {
 public:
-    DecoderThreadTask(const sentencepiece::SentencePieceProcessor* tokenizer,
+    DecodeAndSendTask(const sentencepiece::SentencePieceProcessor* tokenizer,
                       unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data, pthread_mutex_t* uuid_data_lock,
                       const shared_ptr<unordered_map<uint64_t, vector<int>>>& tid_gen_tokens,
                       const shared_ptr<vector<TidGenTokens>>& last_tid_gen_tokens, pthread_mutex_t* decoder_lock,
@@ -958,7 +958,7 @@ void LLaMAWorker::Work() {
                 }
             }
 
-            auto rc = thread_pool_.AddTask(make_shared<DecoderThreadTask>(tokenizer_, &uuid_data_, &uuid_data_lock_,
+            auto rc = thread_pool_.AddTask(make_shared<DecodeAndSendTask>(tokenizer_, &uuid_data_, &uuid_data_lock_,
                                                                           tid_gen_tokens, last_tid_gen_tokens,
                                                                           &decoder_lock_, &thread_pool_));
             if (rc != RC_SUCCESS) {
