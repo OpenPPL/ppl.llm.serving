@@ -788,6 +788,8 @@ private:
 };
 
 void LLaMAWorker::Work() {
+    RetCode rc;
+
     Profiler profiler;
     worker_controller_.Reset();
 
@@ -867,8 +869,8 @@ void LLaMAWorker::Work() {
         // set inputs tensor
         {
             utils::TimingGuard __timing__(&profiler.step_set_input_duration);
-            auto rc = utils::ParallelExecute<SetInputTask>(device_workers_, tensor_parallel_size_, &worker_controller_,
-                                                           worker_thread_args_.data());
+            rc = utils::ParallelExecute<SetInputTask>(device_workers_, tensor_parallel_size_, &worker_controller_,
+                                                      worker_thread_args_.data());
             if (rc != RC_SUCCESS) {
                 LOG(ERROR) << "ParallelExecute(SetInputTask) failed.";
                 break;
@@ -879,8 +881,8 @@ void LLaMAWorker::Work() {
         // model forward
         {
             utils::TimingGuard __timing__(&profiler.step_model_duration);
-            auto rc = utils::ParallelExecute<RunModelTask>(device_workers_, tensor_parallel_size_,
-                                                           worker_thread_args_.data());
+            rc = utils::ParallelExecute<RunModelTask>(device_workers_, tensor_parallel_size_,
+                                                      worker_thread_args_.data());
             if (rc != RC_SUCCESS) {
                 LOG(ERROR) << "ParallelExecute(RunModelTask) failed.";
                 break;
@@ -894,9 +896,9 @@ void LLaMAWorker::Work() {
             utils::TimingGuard __timing__(&profiler.step_sampling_duration);
 
             auto logits = worker_thread_args_[0].logits;
-            RetCode rc = sampler_->SampleTopPTopK(
-                (float*)logits->GetBufferPtr(), worker_controller_.temperatures.data(), running_batch,
-                model_config_.vocab_size, worker_config_.top_p, worker_config_.top_k, gen_tokens.data());
+            rc = sampler_->SampleTopPTopK((float*)logits->GetBufferPtr(), worker_controller_.temperatures.data(),
+                                          running_batch, model_config_.vocab_size, worker_config_.top_p,
+                                          worker_config_.top_k, gen_tokens.data());
             if (rc != RC_SUCCESS) {
                 LOG(ERROR) << "SampleTopPTopK failed: " << GetRetCodeStr(rc);
                 break;
@@ -958,9 +960,9 @@ void LLaMAWorker::Work() {
                 }
             }
 
-            auto rc = thread_pool_.AddTask(make_shared<DecodeAndSendTask>(tokenizer_, &uuid_data_, &uuid_data_lock_,
-                                                                          tid_gen_tokens, last_tid_gen_tokens,
-                                                                          &decoder_lock_, &thread_pool_));
+            rc = thread_pool_.AddTask(make_shared<DecodeAndSendTask>(tokenizer_, &uuid_data_, &uuid_data_lock_,
+                                                                     tid_gen_tokens, last_tid_gen_tokens,
+                                                                     &decoder_lock_, &thread_pool_));
             if (rc != RC_SUCCESS) {
                 LOG(ERROR) << "thread_pool_.AddTask() failed: " << GetRetCodeStr(rc);
                 break;

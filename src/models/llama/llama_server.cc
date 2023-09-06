@@ -21,7 +21,7 @@
 #include "llama_worker.h"
 #include "resource.h"
 #include "serving/grpc_server.h"
-#include "sampler/cuda/sampler.h"
+#include "backends/cuda/sampler.h"
 
 #include "ppl/common/log.h"
 #include "ppl/nn/engines/llm_cuda/engine_factory.h"
@@ -323,7 +323,7 @@ static Engine* CreateCudaEngine(ncclComm_t nccl_comm, int device_id) {
     return engine.release();
 }
 
-static shared_ptr<Sampler> CreateCudaSampler(Runtime* runtime) {
+static shared_ptr<ppl::llm::utils::Sampler> CreateCudaSampler(Runtime* runtime) {
     ppl::nn::DeviceContext::Type needed_type;
     *((int64_t*)needed_type.str) = 0;
     needed_type.str[0] = 'c';
@@ -341,17 +341,17 @@ static shared_ptr<Sampler> CreateCudaSampler(Runtime* runtime) {
 
     if (!dev) {
         LOG(ERROR) << "cannot find cuda device in runtime.";
-        return nullptr;
+        return shared_ptr<ppl::llm::utils::Sampler>();
     }
 
-    auto cu_sampler = make_shared<cuda::Sampler>(dev);
-    auto rc = cu_sampler->Init();
-    if (RC_SUCCESS != rc) {
-        LOG(ERROR) << "cu_sampler->Init() failed: " << GetRetCodeStr(rc);
-        return shared_ptr<Sampler>();
+    cudaStream_t stream;
+    auto rc = dev->Configure(ppl::nn::llm::cuda::DEV_CONF_GET_STREAM, &stream);
+    if (rc != RC_SUCCESS) {
+        LOG(ERROR) << "Configure ppl::nn::llm::cuda::DEV_CONF_GET_STREAM failed: " << GetRetCodeStr(rc);
+        return shared_ptr<ppl::llm::utils::Sampler>();
     }
 
-    return cu_sampler;
+    return make_shared<cuda::Sampler>(stream);
 }
 
 static Runtime* CreatePPLRuntime(Engine* cuda_engine, const string& model_file) {

@@ -15,28 +15,33 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#ifndef __SERVING_SAMPLER_SAMPLER_H__
-#define __SERVING_SAMPLER_SAMPLER_H__
+#ifndef __SERVING_SAMPLER_CUDA_SAMPLER_H__
+#define __SERVING_SAMPLER_CUDA_SAMPLER_H__
 
-#include "ppl/common/retcode.h"
-#include "ppl/nn/runtime/tensor.h"
-#include "ppl/nn/common/device_context.h"
+#include "utils/sampler.h"
+#include <cuda_runtime.h>
 
-namespace ppl { namespace llm {
+namespace ppl { namespace llm { namespace cuda {
 
-class Sampler {
+class Sampler final : public utils::Sampler {
 public:
-    Sampler(ppl::nn::DeviceContext* dev) : dev_(dev) {}
-    virtual ~Sampler() {}
+    Sampler(cudaStream_t stream) : stream_(stream) {}
+    virtual ~Sampler() {
+        Clear();
+    }
 
-    virtual ppl::common::RetCode SampleTopPTopK(const float* logits_device, const float* temperatures_host,
-                                                const int32_t batch, const int32_t vocab_size, const float top_p,
-                                                const float top_k, int32_t* output_host) = 0;
+    ppl::common::RetCode SampleTopPTopK(const float* logits_device, const float* temperatures_host, int32_t batch,
+                                        int32_t vocab_size, float top_p, float top_k, int32_t* output_host) override;
 
-protected:
-    ppl::nn::DeviceContext* dev_;
+private:
+    void Clear();
+
+private:
+    cudaStream_t stream_ = 0;
+    int32_t* cu_output_ = nullptr;
+    int64_t cu_output_size_ = 0;
 };
 
-}} // namespace ppl::llm
+}}}; // namespace ppl::llm::cuda
 
 #endif

@@ -4,7 +4,7 @@ include(cmake/sentencepiece.cmake)
 file(GLOB __PPL_LLAMA_SRC__ src/models/llama/llama_worker.cc)
 
 if(PPLNN_USE_LLM_CUDA)
-    file(GLOB __TMP_SRC__ src/sampler/cuda/*.cc)
+    file(GLOB __TMP_SRC__ src/backends/cuda/*.cc)
     list(APPEND __PPL_LLAMA_SRC__ ${__TMP_SRC__})
     unset(__TMP_SRC__)
 endif()
