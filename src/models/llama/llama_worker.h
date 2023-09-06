@@ -32,6 +32,7 @@
 #include <memory>
 #include <iostream>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace ppl { namespace llm { namespace llama {
 
@@ -66,8 +67,6 @@ struct WorkerConfig {
 struct TidController {
     // init
     uint64_t tid;
-    std::string prompt;
-
     float temperature;
 
     bool is_first_fill = true;
@@ -98,6 +97,7 @@ struct WorkerController {
     std::vector<int64_t> kv_starts; // iter
     std::vector<float> temperatures; // iter
     std::vector<uint64_t> tid_finished; // iter
+    std::unordered_set<uint64_t> tid_shutdown; 
 
     void Reset() {
         decoding_batches = 0;
@@ -189,7 +189,7 @@ private:
     WorkerController worker_controller_;
     std::vector<WorkerThreadArg> worker_thread_args_;
 
-    ppl::common::ThreadPool thread_pool_;
+    ppl::common::ThreadPool decoder_thread_pool_;
     pthread_mutex_t decoder_lock_;
 
     utils::IndexManager idx_mgr_;
