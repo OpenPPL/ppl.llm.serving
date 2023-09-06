@@ -21,7 +21,7 @@
 #include "llama_worker.h"
 #include "resource.h"
 #include "serving/grpc_server.h"
-#include "sampler/cuda/sampler.h"
+#include "backends/cuda/sampler.h"
 
 #include "ppl/common/log.h"
 #include "ppl/nn/engines/llm_cuda/engine_factory.h"
@@ -323,7 +323,8 @@ static Engine* CreateCudaEngine(ncclComm_t nccl_comm, int device_id) {
     return engine.release();
 }
 
-static shared_ptr<Sampler> CreateCudaSampler(Runtime* runtime) {
+static shared_ptr<ppl::llm::utils::Sampler> CreateCudaSampler(const WorkerConfig& wconf, const ModelConfig& mconf,
+                                                              Runtime* runtime) {
     ppl::nn::DeviceContext::Type needed_type;
     *((int64_t*)needed_type.str) = 0;
     needed_type.str[0] = 'c';
@@ -341,14 +342,21 @@ static shared_ptr<Sampler> CreateCudaSampler(Runtime* runtime) {
 
     if (!dev) {
         LOG(ERROR) << "cannot find cuda device in runtime.";
-        return nullptr;
+        return shared_ptr<ppl::llm::utils::Sampler>();
     }
 
-    auto cu_sampler = make_shared<cuda::Sampler>(dev);
-    auto rc = cu_sampler->Init();
+    cudaStream_t stream;
+    auto rc = dev->Configure(ppl::nn::llm::cuda::DEV_CONF_GET_STREAM, &stream);
+    if (rc != RC_SUCCESS) {
+        LOG(ERROR) << "Configure ppl::nn::llm::cuda::DEV_CONF_GET_STREAM failed: " << GetRetCodeStr(rc);
+        return shared_ptr<ppl::llm::utils::Sampler>();
+    }
+
+    auto cu_sampler = make_shared<cuda::TopPTopKSampler>(stream, mconf.vocab_size, wconf.top_p, wconf.top_k);
+    rc = cu_sampler->Init();
     if (RC_SUCCESS != rc) {
         LOG(ERROR) << "cu_sampler->Init() failed: " << GetRetCodeStr(rc);
-        return shared_ptr<Sampler>();
+        return shared_ptr<ppl::llm::utils::Sampler>();
     }
 
     return cu_sampler;
@@ -615,7 +623,7 @@ int main(int argc, char* argv[]) {
               << "; EOS ID: " << tokenizer.eos_id() << "; PAD ID: " << tokenizer.pad_id();
 
     // make sure that Sampler is created before LLaMAWorker
-    auto sampler = CreateCudaSampler(resource_manager.items[0].runtime);
+    auto sampler = CreateCudaSampler(worker_config, model_config, resource_manager.items[0].runtime);
     if (!sampler) {
         LOG(ERROR) << "CreateCudaSampler failed";
         return -1;

@@ -894,9 +894,8 @@ void LLaMAWorker::Work() {
             utils::TimingGuard __timing__(&profiler.step_sampling_duration);
 
             auto logits = worker_thread_args_[0].logits;
-            RetCode rc = sampler_->SampleTopPTopK(
-                (float*)logits->GetBufferPtr(), worker_controller_.temperatures.data(), running_batch,
-                model_config_.vocab_size, worker_config_.top_p, worker_config_.top_k, gen_tokens.data());
+            RetCode rc = sampler_->Process((float*)logits->GetBufferPtr(), worker_controller_.temperatures.data(),
+                                           running_batch, gen_tokens.data());
             if (rc != RC_SUCCESS) {
                 LOG(ERROR) << "SampleTopPTopK failed: " << GetRetCodeStr(rc);
                 break;

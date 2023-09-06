@@ -22,7 +22,7 @@
 #include "common/server.h"
 #include "utils/index_manager.h"
 #include "utils/queue_request_scheduler.h"
-#include "sampler/sampler.h"
+#include "utils/sampler.h"
 
 #include "ppl/nn/models/onnx/runtime_builder_factory.h"
 #include "ppl/nn/runtime/tensor.h"
@@ -162,7 +162,7 @@ public:
 
     void Process(const std::shared_ptr<Request>&, Connection*) override;
 
-    void SetSampler(const std::shared_ptr<Sampler>& sampler) {
+    void SetSampler(const std::shared_ptr<utils::Sampler>& sampler) {
         sampler_ = sampler;
     }
 
@@ -193,7 +193,7 @@ private:
     pthread_mutex_t decoder_lock_;
 
     utils::IndexManager idx_mgr_;
-    std::shared_ptr<Sampler> sampler_;
+    std::shared_ptr<utils::Sampler> sampler_;
 
     uint64_t kv_cache_max_tokens_;
 
