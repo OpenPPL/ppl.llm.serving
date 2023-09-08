@@ -97,7 +97,7 @@ struct WorkerController {
     std::vector<int64_t> kv_starts; // iter
     std::vector<float> temperatures; // iter
     std::vector<uint64_t> tid_finished; // iter
-    std::unordered_set<uint64_t> tid_shutdown; 
+    std::unordered_set<uint64_t> tid_shutdown;
 
     void Reset() {
         decoding_batches = 0;
@@ -182,7 +182,7 @@ private:
     WorkerConfig worker_config_;
 
     // worker threads bound to specific devices
-    ppl::common::ThreadPool* device_workers_;
+    ppl::common::ThreadPool* device_worker_pool_;
 
     int tensor_parallel_size_;
 

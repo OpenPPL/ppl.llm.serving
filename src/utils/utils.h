@@ -34,7 +34,7 @@ inline void DummyTaskDeleter(ppl::common::ThreadTask*) {}
      - has a member function GetRetCode()
  */
 template <typename TaskType, typename... TaskArgType>
-ppl::common::RetCode ParallelExecute(ppl::common::ThreadPool* workers, uint32_t n, TaskArgType&&... rest_args) {
+ppl::common::RetCode ParallelExecute(ppl::common::ThreadPool* worker_pool, uint32_t n, TaskArgType&&... rest_args) {
     auto task_list = (TaskType*)malloc(n * sizeof(TaskType));
     if (!task_list) {
         return ppl::common::RC_OUT_OF_MEMORY;
@@ -42,7 +42,7 @@ ppl::common::RetCode ParallelExecute(ppl::common::ThreadPool* workers, uint32_t 
 
     for (uint32_t i = 0; i < n; ++i) {
         new (task_list + i) TaskType(i, std::forward<TaskArgType>(rest_args)...);
-        workers[i].AddTask(std::shared_ptr<ppl::common::ThreadTask>(task_list + i, DummyTaskDeleter));
+        worker_pool->AddTask(std::shared_ptr<ppl::common::ThreadTask>(task_list + i, DummyTaskDeleter), i);
     }
 
     uint32_t ok_count = 0;

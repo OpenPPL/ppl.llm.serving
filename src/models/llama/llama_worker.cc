@@ -441,7 +441,7 @@ LLaMAWorker::LLaMAWorker(const sentencepiece::SentencePieceProcessor* tokenizer,
     : tokenizer_(tokenizer)
     , model_config_(mconfig)
     , worker_config_(wconfig)
-    , device_workers_(resource.device_workers)
+    , device_worker_pool_(resource.device_worker_pool)
     , tensor_parallel_size_(resource.tensor_parallel_size)
     , worker_thread_args_(resource.tensor_parallel_size) {
     pthread_mutex_init(&uuid_data_lock_, nullptr);
@@ -879,7 +879,7 @@ void LLaMAWorker::Work() {
         // set inputs tensor
         {
             utils::TimingGuard __timing__(&profiler.step_set_input_duration);
-            rc = utils::ParallelExecute<SetInputTask>(device_workers_, tensor_parallel_size_, &worker_controller_,
+            rc = utils::ParallelExecute<SetInputTask>(device_worker_pool_, tensor_parallel_size_, &worker_controller_,
                                                       worker_thread_args_.data());
             if (rc != RC_SUCCESS) {
                 LOG(ERROR) << "ParallelExecute(SetInputTask) failed.";
@@ -891,7 +891,7 @@ void LLaMAWorker::Work() {
         // model forward
         {
             utils::TimingGuard __timing__(&profiler.step_model_duration);
-            rc = utils::ParallelExecute<RunModelTask>(device_workers_, tensor_parallel_size_,
+            rc = utils::ParallelExecute<RunModelTask>(device_worker_pool_, tensor_parallel_size_,
                                                       worker_thread_args_.data());
             if (rc != RC_SUCCESS) {
                 LOG(ERROR) << "ParallelExecute(RunModelTask) failed.";
