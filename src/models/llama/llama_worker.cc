@@ -418,8 +418,13 @@ RetCode LLaMAWorker::CheckParameters() const {
         return RC_INVALID_VALUE;
     }
 
-    if (model_config_.cache_layout != 0 && model_config_.cache_mode != 0) {
-        LOG(ERROR) << "only support cache_layout == 0 and cache_mode == 0";
+    if (model_config_.cache_mode != 0) {
+        LOG(ERROR) << "only support cache_mode == 0";
+        return RC_INVALID_VALUE;
+    }
+
+    if (model_config_.cache_layout != 0 && model_config_.cache_layout != 3) {
+        LOG(ERROR) << "only support cache_layout == 0 && cache_layout == 3";
         return RC_INVALID_VALUE;
     }
 
@@ -472,14 +477,6 @@ LLaMAWorker::LLaMAWorker(const sentencepiece::SentencePieceProcessor* tokenizer,
         arg->max_seq_len->SetDeviceContext(arg->resource->runtime->GetHostDeviceContext());
         arg->max_kv_len->SetDeviceContext(arg->resource->runtime->GetHostDeviceContext());
 
-        arg->kv_cache->GetShape()->Reshape({(int64_t)kv_cache_max_tokens_, model_config_.num_layers, 2,
-                                            model_config_.num_kv_heads / tensor_parallel_size_,
-                                            model_config_.hidden_dim / model_config_.num_heads});
-        arg->kv_scale->GetShape()->Reshape(
-            {(int64_t)kv_cache_max_tokens_, model_config_.num_layers, 2,
-             model_config_.num_kv_heads / tensor_parallel_size_,
-             model_config_.hidden_dim / model_config_.num_heads / model_config_.cache_quant_group});
-
         arg->kv_cache->SetBufferPtr(arg->resource->kv_cache_mem);
         arg->kv_scale->SetBufferPtr(arg->resource->kv_scale_mem);
     }
@@ -504,6 +501,34 @@ RetCode LLaMAWorker::Init() {
         LOG(ERROR) << "CheckParameters failed.";
         return ret;
     }
+
+    for (int i = 0; i < tensor_parallel_size_; i++) {
+        auto arg = &worker_thread_args_[i];
+
+        if (model_config_.cache_layout == 0) {
+            arg->kv_cache->GetShape()->Reshape({(int64_t)kv_cache_max_tokens_, model_config_.num_layers, 2,
+                                                model_config_.num_kv_heads / tensor_parallel_size_,
+                                                model_config_.hidden_dim / model_config_.num_heads});
+            arg->kv_scale->GetShape()->Reshape(
+                {(int64_t)kv_cache_max_tokens_, model_config_.num_layers, 2,
+                model_config_.num_kv_heads / tensor_parallel_size_,
+                model_config_.hidden_dim / model_config_.num_heads / model_config_.cache_quant_group});
+        } else if (model_config_.cache_layout == 3) {
+            arg->kv_cache->GetShape()->Reshape({model_config_.num_layers, 2,
+                                                model_config_.num_kv_heads / tensor_parallel_size_,
+                                                (int64_t)kv_cache_max_tokens_,
+                                                model_config_.hidden_dim / model_config_.num_heads});
+            arg->kv_scale->GetShape()->Reshape(
+                {model_config_.num_layers, 2,
+                model_config_.num_kv_heads / tensor_parallel_size_,
+                (int64_t)kv_cache_max_tokens_,
+                model_config_.hidden_dim / model_config_.num_heads / model_config_.cache_quant_group});
+        } else {
+            LOG(ERROR) << "unsupported cache_layout " << model_config_.cache_layout;
+            return ppl::common::RC_UNSUPPORTED;
+        }
+    }
+
     ret = decoder_thread_pool_.Init(3);
     if (ret != RC_SUCCESS) {
         LOG(ERROR) << "Init Thread Pool error";
@@ -915,6 +940,7 @@ void LLaMAWorker::Work() {
             }
         }
         profiler.sampling_duration += profiler.step_sampling_duration;
+        profiler.gen_token_cnt += running_batch;
 
         // send stream chat rsp
         {
