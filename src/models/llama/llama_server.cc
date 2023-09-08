@@ -431,14 +431,7 @@ struct ResourceManager final {
         }
 
         engine_list.clear();
-
-        if (device_workers) {
-            auto nr = nccl_comm_list.size();
-            for (size_t i = 0; i < nr; ++i) {
-                device_workers[i].~ThreadPool();
-            }
-            free(device_workers);
-        }
+        device_worker_pool.Destroy();
 
         for (auto it = nccl_comm_list.begin(); it != nccl_comm_list.end(); ++it) {
             ncclCommDestroy(*it);
@@ -454,20 +447,10 @@ struct ResourceManager final {
         }
         LOG(INFO) << "Init Nccl successed";
 
-        this->device_workers = (ThreadPool*)malloc(tensor_parallel_size * sizeof(ThreadPool));
-        if (!this->device_workers) {
-            LOG(ERROR) << "allocate device worker failed.";
-            return RC_OUT_OF_MEMORY;
-        }
-        for (uint32_t i = 0; i < tensor_parallel_size; ++i) {
-            new (this->device_workers + i) ThreadPool();
-        }
-        for (uint32_t i = 0; i < tensor_parallel_size; ++i) {
-            auto rc = this->device_workers[i].Init(1);
-            if (rc != RC_SUCCESS) {
-                LOG(ERROR) << "init device worker [" << i << "] failed.";
-                return rc;
-            }
+        rc = this->device_worker_pool.Init(tensor_parallel_size, false);
+        if (rc != RC_SUCCESS) {
+            LOG(ERROR) << "init device worker pool failed.";
+            return rc;
         }
 
         this->engine_list.resize(tensor_parallel_size);
@@ -479,7 +462,7 @@ struct ResourceManager final {
             pthread_barrier_destroy(&alloc_max_mem_barrier);
         });
 
-        rc = ppl::llm::utils::ParallelExecute<InitTask>(this->device_workers, tensor_parallel_size, model_dir,
+        rc = ppl::llm::utils::ParallelExecute<InitTask>(&this->device_worker_pool, tensor_parallel_size, model_dir,
                                                         kv_cache_block_bytes, kv_scale_block_bytes,
                                                         kv_cache_max_tokens_scale, &alloc_max_mem_barrier, this);
         if (rc != RC_SUCCESS) {
@@ -491,7 +474,7 @@ struct ResourceManager final {
     }
 
     vector<ncclComm_t> nccl_comm_list;
-    ThreadPool* device_workers = nullptr;
+    ThreadPool device_worker_pool;
     vector<unique_ptr<Engine>> engine_list;
     vector<ResourceItem> items;
     uint64_t kv_cache_max_tokens;
@@ -628,7 +611,7 @@ int main(int argc, char* argv[]) {
     resource.tensor_parallel_size = server_config.tensor_parallel_size;
     resource.kv_cache_max_tokens = resource_manager.kv_cache_max_tokens;
     resource.items = resource_manager.items.data();
-    resource.device_workers = resource_manager.device_workers;
+    resource.device_worker_pool = &resource_manager.device_worker_pool;
     LLaMAWorker llama_worker(&tokenizer, resource, model_config, worker_config);
 
     rc = llama_worker.Init();

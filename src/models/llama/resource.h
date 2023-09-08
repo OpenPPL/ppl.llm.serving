@@ -35,7 +35,7 @@ struct Resource final {
     uint32_t tensor_parallel_size = 0;
     uint64_t kv_cache_max_tokens = 0;
     ResourceItem* items = nullptr;
-    ppl::common::ThreadPool* device_workers = nullptr;
+    ppl::common::ThreadPool* device_worker_pool = nullptr;
 };
 
 }}} // namespace ppl::llm::llama
