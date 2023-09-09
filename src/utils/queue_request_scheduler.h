@@ -89,6 +89,12 @@ private:
     int consumer_queue_index_;
     pthread_mutex_t switch_queue_lock_;
     std::queue<std::shared_ptr<ReqType>> queues_[2];
+
+private:
+    QueueRequestScheduler(const QueueRequestScheduler&) = delete;
+    void operator=(const QueueRequestScheduler&) = delete;
+    QueueRequestScheduler(QueueRequestScheduler&&) = delete;
+    void operator=(QueueRequestScheduler&&) = delete;
 };
 
 }}} // namespace ppl::llm::utils

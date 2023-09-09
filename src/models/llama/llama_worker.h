@@ -207,6 +207,12 @@ private:
     std::unordered_map<uint64_t, UuidData> uuid_data_;
     std::unordered_map<Connection*, std::vector<uint64_t>> conn2uuid_;
     uint64_t uuid_seq_ = 0;
+
+private:
+    LLaMAWorker(const LLaMAWorker&) = delete;
+    void operator=(const LLaMAWorker&) = delete;
+    LLaMAWorker(LLaMAWorker&&) = delete;
+    void operator=(LLaMAWorker&&) = delete;
 };
 
 }}} // namespace ppl::llm::llama
