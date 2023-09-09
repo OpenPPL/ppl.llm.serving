@@ -67,6 +67,12 @@ private:
     bool new_call_thread_created_ = false;
     pthread_t new_call_thread_;
     ThreadArg arg_;
+
+private:
+    GRPCServer(const GRPCServer&) = delete;
+    void operator=(const GRPCServer&) = delete;
+    GRPCServer(GRPCServer&&) = delete;
+    void operator=(GRPCServer&&) = delete;
 };
 
 }} // namespace ppl::llm
