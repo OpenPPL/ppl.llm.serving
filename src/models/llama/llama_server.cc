@@ -323,37 +323,6 @@ static Engine* CreateCudaEngine(ncclComm_t nccl_comm, int device_id) {
     return engine.release();
 }
 
-static shared_ptr<ppl::llm::utils::Sampler> CreateCudaSampler(Runtime* runtime) {
-    ppl::nn::DeviceContext::Type needed_type;
-    *((int64_t*)needed_type.str) = 0;
-    needed_type.str[0] = 'c';
-    needed_type.str[1] = 'u';
-    needed_type.str[2] = 'd';
-    needed_type.str[3] = 'a';
-
-    ppl::nn::DeviceContext* dev = nullptr;
-    for (uint32_t i = 0; i < runtime->GetDeviceContextCount(); ++i) {
-        if (runtime->GetDeviceContext(i)->GetType() == needed_type) {
-            dev = runtime->GetDeviceContext(i);
-            break;
-        }
-    }
-
-    if (!dev) {
-        LOG(ERROR) << "cannot find cuda device in runtime.";
-        return shared_ptr<ppl::llm::utils::Sampler>();
-    }
-
-    cudaStream_t stream;
-    auto rc = dev->Configure(ppl::nn::llm::cuda::DEV_CONF_GET_STREAM, &stream);
-    if (rc != RC_SUCCESS) {
-        LOG(ERROR) << "Configure ppl::nn::llm::cuda::DEV_CONF_GET_STREAM failed: " << GetRetCodeStr(rc);
-        return shared_ptr<ppl::llm::utils::Sampler>();
-    }
-
-    return make_shared<cuda::Sampler>(stream);
-}
-
 static Runtime* CreatePPLRuntime(Engine* cuda_engine, const string& model_file) {
     auto builder = unique_ptr<onnx::RuntimeBuilder>(onnx::RuntimeBuilderFactory::Create());
     if (!builder) {
@@ -438,8 +407,39 @@ struct ResourceManager final {
         }
     }
 
+    shared_ptr<ppl::llm::utils::Sampler> CreateCudaSampler(Runtime* runtime) {
+        ppl::nn::DeviceContext::Type needed_type;
+        *((int64_t*)needed_type.str) = 0;
+        needed_type.str[0] = 'c';
+        needed_type.str[1] = 'u';
+        needed_type.str[2] = 'd';
+        needed_type.str[3] = 'a';
+
+        ppl::nn::DeviceContext* dev = nullptr;
+        for (uint32_t i = 0; i < runtime->GetDeviceContextCount(); ++i) {
+            if (runtime->GetDeviceContext(i)->GetType() == needed_type) {
+                dev = runtime->GetDeviceContext(i);
+                break;
+            }
+        }
+
+        if (!dev) {
+            LOG(ERROR) << "cannot find cuda device in runtime.";
+            return shared_ptr<ppl::llm::utils::Sampler>();
+        }
+
+        cudaStream_t stream;
+        auto rc = dev->Configure(ppl::nn::llm::cuda::DEV_CONF_GET_STREAM, &stream);
+        if (rc != RC_SUCCESS) {
+            LOG(ERROR) << "Configure ppl::nn::llm::cuda::DEV_CONF_GET_STREAM failed: " << GetRetCodeStr(rc);
+            return shared_ptr<ppl::llm::utils::Sampler>();
+        }
+
+        return make_shared<cuda::Sampler>(stream);
+    }
+
     RetCode Init(uint32_t tensor_parallel_size, uint64_t kv_cache_block_bytes, uint64_t kv_scale_block_bytes,
-                 float kv_cache_max_tokens_scale, const string& model_dir) {
+                 float kv_cache_max_tokens_scale, const string& model_dir, const string& tokenizer_path) {
         auto rc = InitNccl(tensor_parallel_size, &nccl_comm_list);
         if (rc != RC_SUCCESS) {
             LOG(ERROR) << "NCCL init failed.";
@@ -470,6 +470,20 @@ struct ResourceManager final {
             return rc;
         }
 
+        this->sampler = CreateCudaSampler(this->items[0].runtime);
+        if (!sampler) {
+            LOG(ERROR) << "CreateCudaSampler failed";
+            return RC_OTHER_ERROR;
+        }
+
+        auto tokenizer_status = this->tokenizer.Load(tokenizer_path);
+        if (!tokenizer_status.ok()) {
+            LOG(ERROR) << tokenizer_status.ToString();
+            return RC_OTHER_ERROR;
+        }
+        LOG(INFO) << "VOCAB_SIZE: " << tokenizer.GetPieceSize() << "; BOS ID: " << tokenizer.bos_id()
+                  << "; EOS ID: " << tokenizer.eos_id() << "; PAD ID: " << tokenizer.pad_id();
+
         return RC_SUCCESS;
     }
 
@@ -477,10 +491,11 @@ struct ResourceManager final {
     ThreadPool device_worker_pool;
     vector<unique_ptr<Engine>> engine_list;
     vector<ResourceItem> items;
+    shared_ptr<ppl::llm::utils::Sampler> sampler;
+    sentencepiece::SentencePieceProcessor tokenizer;
     uint64_t kv_cache_max_tokens;
 };
 
-// put impl after ResourceManager
 shared_ptr<ThreadTask> InitTask::Process() {
     shared_ptr<void> change_state(nullptr, [this](void*) -> void {
         is_finished_ = true;
@@ -584,26 +599,10 @@ int main(int argc, char* argv[]) {
     // init nccl, cuda engine, kv cache, kv scale manager
     ResourceManager resource_manager;
     auto rc = resource_manager.Init(server_config.tensor_parallel_size, kv_cache_block_bytes, kv_scale_block_bytes,
-                                    server_config.max_tokens_scale, server_config.model_dir);
+                                    server_config.max_tokens_scale, server_config.model_dir, server_config.tokenizer_path);
 
     if (rc != RC_SUCCESS) {
         LOG(ERROR) << "init ResourceManager failed: " << GetRetCodeStr(rc);
-        return -1;
-    }
-
-    sentencepiece::SentencePieceProcessor tokenizer;
-    auto tokenizer_status = tokenizer.Load(server_config.tokenizer_path);
-    if (!tokenizer_status.ok()) {
-        LOG(ERROR) << tokenizer_status.ToString();
-        return -1;
-    }
-    LOG(INFO) << "VOCAB_SIZE: " << tokenizer.GetPieceSize() << "; BOS ID: " << tokenizer.bos_id()
-              << "; EOS ID: " << tokenizer.eos_id() << "; PAD ID: " << tokenizer.pad_id();
-
-    // make sure that Sampler is created before LLaMAWorker
-    auto sampler = CreateCudaSampler(resource_manager.items[0].runtime);
-    if (!sampler) {
-        LOG(ERROR) << "CreateCudaSampler failed";
         return -1;
     }
 
@@ -611,8 +610,10 @@ int main(int argc, char* argv[]) {
     resource.tensor_parallel_size = server_config.tensor_parallel_size;
     resource.kv_cache_max_tokens = resource_manager.kv_cache_max_tokens;
     resource.items = resource_manager.items.data();
+    resource.sampler = resource_manager.sampler.get();
     resource.device_worker_pool = &resource_manager.device_worker_pool;
-    LLaMAWorker llama_worker(&tokenizer, resource, model_config, worker_config);
+    resource.tokenizer = &resource_manager.tokenizer;
+    LLaMAWorker llama_worker(resource, model_config, worker_config);
 
     rc = llama_worker.Init();
     if (rc != RC_SUCCESS) {
@@ -621,22 +622,20 @@ int main(int argc, char* argv[]) {
     }
     LOG(INFO) << "Init llama worker successed";
 
-    llama_worker.SetSampler(sampler);
-
-    auto svr = make_shared<GRPCServer>();
+    GRPCServer svr;
     auto listen_addr = server_config.host + ":" + std::to_string(server_config.port);
-    rc = svr->Init(listen_addr);
+    rc = svr.Init(listen_addr);
     if (rc != RC_SUCCESS) {
         LOG(ERROR) << "GRPCConnection init failed.";
         return -1;
     }
 
-    svr->SetOnDisconnectedFunc([&llama_worker](Connection* c) {
+    svr.SetOnDisconnectedFunc([&llama_worker](Connection* c) {
         llama_worker.ClearTask(c);
     });
     LOG(INFO) << "listening on [" << listen_addr << "]";
 
-    svr->Loop(&llama_worker);
+    svr.Loop(&llama_worker);
 
     return 0;
 }

@@ -28,7 +28,6 @@
 #include "ppl/nn/runtime/tensor.h"
 #include "ppl/common/threadpool.h"
 
-#include <sentencepiece_processor.h>
 #include <memory>
 #include <iostream>
 #include <unordered_map>
@@ -152,8 +151,7 @@ public:
         Connection* conn;
     };
 
-    LLaMAWorker(const sentencepiece::SentencePieceProcessor* tokenizer, const Resource& resource,
-                const ModelConfig& mconfig, const WorkerConfig& wconfig);
+    LLaMAWorker(const Resource& resource, const ModelConfig& mconfig, const WorkerConfig& wconfig);
 
     ~LLaMAWorker();
 
@@ -161,10 +159,6 @@ public:
     void ClearTask(Connection*);
 
     void Process(const std::shared_ptr<Request>&, Connection*) override;
-
-    void SetSampler(const std::shared_ptr<utils::Sampler>& sampler) {
-        sampler_ = sampler;
-    }
 
 private:
     ppl::common::RetCode CheckParameters() const;
@@ -193,7 +187,7 @@ private:
     pthread_mutex_t decoder_lock_;
 
     utils::IndexManager idx_mgr_;
-    std::shared_ptr<utils::Sampler> sampler_;
+    utils::Sampler* sampler_;
 
     uint64_t kv_cache_max_tokens_;
 

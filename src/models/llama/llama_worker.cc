@@ -441,14 +441,14 @@ RetCode LLaMAWorker::CheckParameters() const {
     return RC_SUCCESS;
 }
 
-LLaMAWorker::LLaMAWorker(const sentencepiece::SentencePieceProcessor* tokenizer, const Resource& resource,
-                         const ModelConfig& mconfig, const WorkerConfig& wconfig)
-    : tokenizer_(tokenizer)
+LLaMAWorker::LLaMAWorker(const Resource& resource, const ModelConfig& mconfig, const WorkerConfig& wconfig)
+    : tokenizer_(resource.tokenizer)
     , model_config_(mconfig)
     , worker_config_(wconfig)
     , device_worker_pool_(resource.device_worker_pool)
     , tensor_parallel_size_(resource.tensor_parallel_size)
-    , worker_thread_args_(resource.tensor_parallel_size) {
+    , worker_thread_args_(resource.tensor_parallel_size)
+    , sampler_(resource.sampler) {
     pthread_mutex_init(&uuid_data_lock_, nullptr);
 
     kv_cache_max_tokens_ = resource.kv_cache_max_tokens;
