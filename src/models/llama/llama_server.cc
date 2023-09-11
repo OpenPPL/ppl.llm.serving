@@ -39,7 +39,7 @@ using namespace ppl::llm::llama;
 using namespace ppl::common;
 using namespace ppl::nn;
 
-struct ServerConfig {
+struct ServerConfig final {
     string model_dir;
     string model_param_path;
     string tokenizer_path;
@@ -57,7 +57,7 @@ struct ServerConfig {
     int port;
 };
 
-bool ParseServerConfig(const string& config_file, ServerConfig* server_config) {
+static bool ParseServerConfig(const string& config_file, ServerConfig* server_config) {
     ifstream ifs(config_file);
     rapidjson::IStreamWrapper isw(ifs);
     rapidjson::Document json_reader;
@@ -162,18 +162,7 @@ bool ParseServerConfig(const string& config_file, ServerConfig* server_config) {
     return true;
 }
 
-bool InitJsonReader(const string config_file, rapidjson::Document* document) {
-    ifstream ifs(config_file);
-    rapidjson::IStreamWrapper isw(ifs);
-    document->ParseStream(isw);
-    if (document->HasParseError()) {
-        LOG(ERROR) << "Parse Json Error, model_config file: " << config_file;
-        return false;
-    }
-    return true;
-}
-
-bool ParseModelConfig(const string& model_param_path, ModelConfig* model_config) {
+static bool ParseModelConfig(const string& model_param_path, ModelConfig* model_config) {
     ifstream ifs(model_param_path);
     rapidjson::IStreamWrapper isw(ifs);
     rapidjson::Document document;
@@ -438,8 +427,14 @@ struct ResourceManager final {
         return make_shared<cuda::Sampler>(stream);
     }
 
-    RetCode Init(uint32_t tensor_parallel_size, uint64_t kv_cache_block_bytes, uint64_t kv_scale_block_bytes,
-                 float kv_cache_max_tokens_scale, const string& model_dir, const string& tokenizer_path) {
+    RetCode Init(const ModelConfig& model_config, const ServerConfig& server_config) {
+        const uint64_t kv_cache_block_bytes = model_config.num_layers * 2 * model_config.num_kv_heads /
+            server_config.tensor_parallel_size * model_config.hidden_dim / model_config.num_heads * sizeof(int8_t);
+        const uint64_t kv_scale_block_bytes = model_config.num_layers * 2 * model_config.num_kv_heads /
+            server_config.tensor_parallel_size * model_config.hidden_dim / model_config.num_heads /
+            model_config.cache_quant_group * sizeof(float16_t);
+        const int tensor_parallel_size = server_config.tensor_parallel_size;
+
         auto rc = InitNccl(tensor_parallel_size, &nccl_comm_list);
         if (rc != RC_SUCCESS) {
             LOG(ERROR) << "NCCL init failed.";
@@ -462,9 +457,9 @@ struct ResourceManager final {
             pthread_barrier_destroy(&alloc_max_mem_barrier);
         });
 
-        rc = ppl::llm::utils::ParallelExecute<InitTask>(&this->device_worker_pool, tensor_parallel_size, model_dir,
+        rc = ppl::llm::utils::ParallelExecute<InitTask>(&this->device_worker_pool, tensor_parallel_size, server_config.model_dir,
                                                         kv_cache_block_bytes, kv_scale_block_bytes,
-                                                        kv_cache_max_tokens_scale, &alloc_max_mem_barrier, this);
+                                                        server_config.max_tokens_scale, &alloc_max_mem_barrier, this);
         if (rc != RC_SUCCESS) {
             LOG(ERROR) << "ParallelExecute(InitTask) of [" << tensor_parallel_size << "] task(s) failed.";
             return rc;
@@ -476,7 +471,7 @@ struct ResourceManager final {
             return RC_OTHER_ERROR;
         }
 
-        auto tokenizer_status = this->tokenizer.Load(tokenizer_path);
+        auto tokenizer_status = this->tokenizer.Load(server_config.tokenizer_path);
         if (!tokenizer_status.ok()) {
             LOG(ERROR) << tokenizer_status.ToString();
             return RC_OTHER_ERROR;
@@ -590,17 +585,9 @@ int main(int argc, char* argv[]) {
     }
     LOG(INFO) << "Parse model model_config successed";
 
-    const uint64_t kv_cache_block_bytes = model_config.num_layers * 2 * model_config.num_kv_heads /
-        server_config.tensor_parallel_size * model_config.hidden_dim / model_config.num_heads * sizeof(int8_t);
-    const uint64_t kv_scale_block_bytes = model_config.num_layers * 2 * model_config.num_kv_heads /
-        server_config.tensor_parallel_size * model_config.hidden_dim / model_config.num_heads /
-        model_config.cache_quant_group * sizeof(float16_t);
-
     // init nccl, cuda engine, kv cache, kv scale manager
     ResourceManager resource_manager;
-    auto rc = resource_manager.Init(server_config.tensor_parallel_size, kv_cache_block_bytes, kv_scale_block_bytes,
-                                    server_config.max_tokens_scale, server_config.model_dir, server_config.tokenizer_path);
-
+    auto rc = resource_manager.Init(model_config, server_config);
     if (rc != RC_SUCCESS) {
         LOG(ERROR) << "init ResourceManager failed: " << GetRetCodeStr(rc);
         return -1;
