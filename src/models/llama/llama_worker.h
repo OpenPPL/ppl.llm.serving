@@ -35,7 +35,7 @@
 
 namespace ppl { namespace llm { namespace llama {
 
-struct ModelConfig {
+struct ModelConfig final {
     int hidden_dim;
     int intermediate_dim;
     int num_layers;
@@ -55,7 +55,7 @@ struct ModelConfig {
     bool auto_causal;
 };
 
-struct WorkerConfig {
+struct WorkerConfig final {
     float top_p;
     int top_k;
 
@@ -63,7 +63,7 @@ struct WorkerConfig {
     int max_running_batch;
 };
 
-struct TidController {
+struct TidController final {
     // init
     uint64_t tid;
     float temperature;
@@ -80,7 +80,7 @@ struct TidController {
     std::vector<int> next_tokens; // update
 };
 
-struct WorkerController {
+struct WorkerController final {
     int64_t decoding_batches = 0; // update && finish
     int64_t max_seq_len = 0; // iter
     int64_t max_kv_len = 0; // iter
@@ -118,7 +118,7 @@ struct WorkerController {
     }
 };
 
-struct WorkerThreadArg {
+struct WorkerThreadArg final {
     ResourceItem* resource;
 
     ppl::nn::Tensor* token_ids;
