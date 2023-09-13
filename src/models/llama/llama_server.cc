@@ -22,8 +22,10 @@
 #include "resource.h"
 #include "serving/grpc_server.h"
 #include "backends/cuda/sampler.h"
+#include "tokenizer/tokenizer_llama.h"
 
 #include "ppl/common/log.h"
+#include "ppl/common/barrier.h"
 #include "ppl/nn/engines/llm_cuda/engine_factory.h"
 #include "ppl/nn/runtime/tensor.h"
 #include "rapidjson/document.h"
@@ -346,10 +348,10 @@ static Runtime* CreatePPLRuntime(Engine* cuda_engine, const string& model_file) 
 
 class ResourceManager;
 
-class InitTask final : public JoinableThreadTask {
+class InitTask final {
 public:
     InitTask(uint32_t id, const string& model_dir, uint64_t kv_cache_block_bytes, uint64_t kv_scale_block_bytes,
-             float kv_cache_max_tokens_scale, pthread_barrier_t* alloc_max_mem_barrier, ResourceManager* mgr)
+             float kv_cache_max_tokens_scale, Barrier* alloc_max_mem_barrier, ResourceManager* mgr)
         : id_(id)
         , model_dir_(model_dir)
         , kv_cache_block_bytes_(kv_cache_block_bytes)
@@ -358,15 +360,7 @@ public:
         , alloc_max_mem_barrier_(alloc_max_mem_barrier)
         , mgr_(mgr) {}
 
-    inline RetCode GetRetCode() const {
-        return rc_;
-    }
-
-protected:
-    bool IsFinished() const override {
-        return is_finished_;
-    }
-    shared_ptr<ThreadTask> Process() override;
+    RetCode Process();
 
 private:
     const uint32_t id_;
@@ -374,10 +368,8 @@ private:
     const uint64_t kv_cache_block_bytes_;
     const uint64_t kv_scale_block_bytes_;
     const float kv_cache_max_tokens_scale_;
-    pthread_barrier_t* alloc_max_mem_barrier_;
+    Barrier* alloc_max_mem_barrier_;
     ResourceManager* mgr_;
-    RetCode rc_;
-    bool is_finished_ = false;
 };
 
 struct ResourceManager final {
@@ -389,7 +381,6 @@ struct ResourceManager final {
         }
 
         engine_list.clear();
-        device_worker_pool.Destroy();
 
         for (auto it = nccl_comm_list.begin(); it != nccl_comm_list.end(); ++it) {
             ncclCommDestroy(*it);
@@ -442,26 +433,23 @@ struct ResourceManager final {
         }
         LOG(INFO) << "Init Nccl successed";
 
-        rc = this->device_worker_pool.Init(tensor_parallel_size, false);
-        if (rc != RC_SUCCESS) {
-            LOG(ERROR) << "init device worker pool failed.";
-            return rc;
-        }
-
         this->engine_list.resize(tensor_parallel_size);
         this->items.resize(tensor_parallel_size);
 
-        pthread_barrier_t alloc_max_mem_barrier;
-        pthread_barrier_init(&alloc_max_mem_barrier, nullptr, tensor_parallel_size);
-        shared_ptr<void> __barrier_destructor(nullptr, [&alloc_max_mem_barrier](void*) -> void {
-            pthread_barrier_destroy(&alloc_max_mem_barrier);
-        });
+        rc = this->device_worker_pool.Init(tensor_parallel_size);
+        if (rc != RC_SUCCESS) {
+            LOG(ERROR) << "init device worker failed.";
+            return rc;
+        }
 
-        rc = ppl::llm::utils::ParallelExecute<InitTask>(&this->device_worker_pool, tensor_parallel_size, server_config.model_dir,
+        Barrier alloc_max_mem_barrier;
+        alloc_max_mem_barrier.Reset(tensor_parallel_size);
+        rc = ppl::llm::utils::ParallelExecute<InitTask>(&this->device_worker_pool, server_config.model_dir,
                                                         kv_cache_block_bytes, kv_scale_block_bytes,
                                                         server_config.max_tokens_scale, &alloc_max_mem_barrier, this);
+
         if (rc != RC_SUCCESS) {
-            LOG(ERROR) << "ParallelExecute(InitTask) of [" << tensor_parallel_size << "] task(s) failed.";
+            LOG(ERROR) << "ParallelExecute(InitTask) failed.";
             return rc;
         }
 
@@ -471,36 +459,29 @@ struct ResourceManager final {
             return RC_OTHER_ERROR;
         }
 
-        auto tokenizer_status = this->tokenizer.Load(server_config.tokenizer_path);
-        if (!tokenizer_status.ok()) {
-            LOG(ERROR) << tokenizer_status.ToString();
-            return RC_OTHER_ERROR;
+        rc = tokenizer.Init(server_config.tokenizer_path);
+        if (rc != RC_SUCCESS) {
+            LOG(ERROR) << "init Tokenizer failed: " << GetRetCodeStr(rc);
+            return -1;
         }
-        LOG(INFO) << "VOCAB_SIZE: " << tokenizer.GetPieceSize() << "; BOS ID: " << tokenizer.bos_id()
-                  << "; EOS ID: " << tokenizer.eos_id() << "; PAD ID: " << tokenizer.pad_id();
 
         return RC_SUCCESS;
     }
 
     vector<ncclComm_t> nccl_comm_list;
-    ThreadPool device_worker_pool;
+    StaticThreadPool device_worker_pool;
     vector<unique_ptr<Engine>> engine_list;
     vector<ResourceItem> items;
     shared_ptr<ppl::llm::utils::Sampler> sampler;
-    sentencepiece::SentencePieceProcessor tokenizer;
+    LlamaTokenizer tokenizer;
     uint64_t kv_cache_max_tokens;
 };
 
-shared_ptr<ThreadTask> InitTask::Process() {
-    shared_ptr<void> change_state(nullptr, [this](void*) -> void {
-        is_finished_ = true;
-    });
-
+RetCode InitTask::Process() {
     auto engine = unique_ptr<Engine>(CreateCudaEngine(mgr_->nccl_comm_list[id_], id_));
     if (!engine) {
         LOG(ERROR) << "create cuda engine [" << id_ << "] failed.";
-        rc_ = RC_OTHER_ERROR;
-        return shared_ptr<ThreadTask>();
+        return RC_OTHER_ERROR;
     }
     LOG(INFO) << "create engine [" << id_ << "] success.";
 
@@ -512,8 +493,7 @@ shared_ptr<ThreadTask> InitTask::Process() {
         runtime = unique_ptr<Runtime>(CreatePPLRuntime(engine.get(), model_path));
         if (!runtime) {
             LOG(ERROR) << "create runtime [" << id_ << "] failed.";
-            rc_ = RC_OTHER_ERROR;
-            return shared_ptr<ThreadTask>();
+            return RC_OTHER_ERROR;
         }
     }
 
@@ -533,7 +513,8 @@ shared_ptr<ThreadTask> InitTask::Process() {
         mgr_->kv_cache_max_tokens = kv_cache_max_bytes / kv_cache_block_bytes_;
         LOG(INFO) << "max_tokens: " << mgr_->kv_cache_max_tokens;
     }
-    pthread_barrier_wait(alloc_max_mem_barrier_);
+
+    alloc_max_mem_barrier_->Wait();
 
     ResourceItem item;
 
@@ -541,23 +522,20 @@ shared_ptr<ThreadTask> InitTask::Process() {
     if (cu_ret != cudaSuccess) {
         LOG(ERROR) << "alloc kv cache [" << mgr_->kv_cache_max_tokens * kv_cache_block_bytes_
                    << "] failed: " << cudaGetErrorString(cu_ret);
-        rc_ = RC_OTHER_ERROR;
-        return shared_ptr<ThreadTask>();
+        return RC_OTHER_ERROR;
     }
     cu_ret = cudaMalloc(&item.kv_scale_mem, mgr_->kv_cache_max_tokens * kv_scale_block_bytes_);
     if (cu_ret != cudaSuccess) {
         cudaFree(item.kv_cache_mem);
         LOG(ERROR) << "alloc kv scale [" << mgr_->kv_cache_max_tokens * kv_scale_block_bytes_
                    << "] failed: " << cudaGetErrorString(cu_ret);
-        rc_ = RC_OTHER_ERROR;
-        return shared_ptr<ThreadTask>();
+        return RC_OTHER_ERROR;
     }
     item.runtime = runtime.release();
 
     mgr_->items[id_] = item;
 
-    rc_ = RC_SUCCESS;
-    return shared_ptr<ThreadTask>();
+    return RC_SUCCESS;
 }
 
 int main(int argc, char* argv[]) {

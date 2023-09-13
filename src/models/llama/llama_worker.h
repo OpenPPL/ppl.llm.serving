@@ -23,6 +23,7 @@
 #include "utils/index_manager.h"
 #include "utils/queue_request_scheduler.h"
 #include "utils/sampler.h"
+#include "tokenizer/tokenizer.h"
 
 #include "ppl/nn/models/onnx/runtime_builder_factory.h"
 #include "ppl/nn/runtime/tensor.h"
@@ -61,6 +62,13 @@ struct WorkerConfig final {
 
     int max_tokens_per_request;
     int max_running_batch;
+};
+
+struct TidGenToken final {
+    TidGenToken(uint64_t tid, int token, bool is_last) : tid(tid), token(token), is_last(is_last) {}
+    uint64_t tid;
+    int token;
+    bool is_last;
 };
 
 struct TidController final {
@@ -170,21 +178,24 @@ private:
     static void* WorkerThreadFunc(void*);
 
 private:
-    const sentencepiece::SentencePieceProcessor* tokenizer_;
+    const Tokenizer* tokenizer_;
 
     ModelConfig model_config_;
     WorkerConfig worker_config_;
 
     // worker threads bound to specific devices
-    ppl::common::ThreadPool* device_worker_pool_;
+    ppl::common::StaticThreadPool* device_worker_pool_;
 
     int tensor_parallel_size_;
 
     WorkerController worker_controller_;
     std::vector<WorkerThreadArg> worker_thread_args_;
 
-    ppl::common::ThreadPool decoder_thread_pool_;
+    std::vector<TidGenToken> tid_gen_token_list_;
+
+    ppl::common::StaticThreadPool decoder_thread_pool_;
     pthread_mutex_t decoder_lock_;
+    pthread_mutex_t tid_shutdown_lock_;
 
     utils::IndexManager idx_mgr_;
     utils::Sampler* sampler_;
@@ -202,6 +213,9 @@ private:
     std::unordered_map<Connection*, std::vector<uint64_t>> conn2uuid_;
     uint64_t uuid_seq_ = 0;
 
+private:
+    static constexpr int DECODER_THREAD_NUM = 2;
+    
 private:
     LLaMAWorker(const LLaMAWorker&) = delete;
     void operator=(const LLaMAWorker&) = delete;

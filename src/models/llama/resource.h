@@ -18,10 +18,11 @@
 #ifndef __PPL_LLM_RESOURCE_H__
 #define __PPL_LLM_RESOURCE_H__
 
+#include "tokenizer/tokenizer.h"
 #include "utils/sampler.h"
+
 #include "ppl/common/threadpool.h"
 #include "ppl/nn/runtime/runtime.h"
-#include "sentencepiece_processor.h"
 #include <vector>
 #include <memory>
 
@@ -38,8 +39,8 @@ struct Resource final {
     uint64_t kv_cache_max_tokens = 0;
     ResourceItem* items = nullptr;
     utils::Sampler* sampler = nullptr;
-    ppl::common::ThreadPool* device_worker_pool = nullptr;
-    const sentencepiece::SentencePieceProcessor* tokenizer = nullptr;
+    ppl::common::StaticThreadPool* device_worker_pool = nullptr;
+    const Tokenizer* tokenizer = nullptr;
 };
 
 }}} // namespace ppl::llm::llama

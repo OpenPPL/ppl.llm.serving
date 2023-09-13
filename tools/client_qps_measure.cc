@@ -37,8 +37,8 @@ struct TidRecord {
 };
 static std::unordered_map<int64_t, TidRecord> tid_record_map;
 
-
-void SampleRequest(const std::string& dataset_path, const sentencepiece::SentencePieceProcessor& tokenizer, std::vector<std::shared_ptr<proto::BatchedRequest>>* req_list) {
+void SampleRequest(const std::string& dataset_path, const sentencepiece::SentencePieceProcessor& tokenizer,
+                   std::vector<std::shared_ptr<proto::BatchedRequest>>* req_list) {
     std::ifstream ifs(dataset_path);
     rapidjson::IStreamWrapper isw(ifs);
     rapidjson::Document root;
@@ -81,7 +81,6 @@ public:
 
     void Generation(const std::vector<std::shared_ptr<proto::BatchedRequest>> req_list) {
         for (size_t i = 0; i < req_list.size(); i++) {
-
             const auto& req_batch = *req_list[i];
             AsyncClientCall* call = new AsyncClientCall;
 
@@ -139,7 +138,7 @@ private:
                             tid_record_map[tid].is_prefill = false;
                         }
                         const std::string& rsp_stream = rsp.generated();
-                        rsp_stream_store[tid] += (rsp_stream + " ");
+                        rsp_stream_store[tid] += rsp_stream;
                         response_reader->Read(&reply, (void*)this);
                     } else {
                         response_reader->Finish(&status, (void*)this);
@@ -209,23 +208,27 @@ int main(int argc, char const* argv[]) {
         double(std::chrono::duration_cast<std::chrono::microseconds>(benchmark_end - benchmark_start).count()) /
         1000.0 / 1000.0;
 
-    double total_prefill_latency = 0;   // ms
+    double total_prefill_latency = 0; // ms
     double total_decode_latency_per_token = 0; // ms
     double total_prompt_latency = 0; // ms
     int total_input_tokens = 0;
     int total_gen_tokens = 0;
     for (auto it = tid_record_map.begin(); it != tid_record_map.end(); ++it) {
         auto& tid_record = it->second;
-        double prefill_latency = double(std::chrono::duration_cast<std::chrono::microseconds>(tid_record.prefill_time - benchmark_start).count() /
+        double prefill_latency = double(
+            std::chrono::duration_cast<std::chrono::microseconds>(tid_record.prefill_time - benchmark_start).count() /
             1000.0); // ms
-        
-        double decoding_tatency = double(std::chrono::duration_cast<std::chrono::microseconds>(tid_record.finished_time - tid_record.prefill_time).count() /
+
+        double decoding_tatency = double(
+            std::chrono::duration_cast<std::chrono::microseconds>(tid_record.finished_time - tid_record.prefill_time)
+                .count() /
             1000.0); // ms
-        double prompt_latency = double(std::chrono::duration_cast<std::chrono::microseconds>(tid_record.finished_time - benchmark_start).count() /
+        double prompt_latency = double(
+            std::chrono::duration_cast<std::chrono::microseconds>(tid_record.finished_time - benchmark_start).count() /
             1000.0); // ms
         // total_latency_per_token += (prompt_latency / tid_record.output_len);
         total_prompt_latency += prompt_latency;
-        
+
         total_prefill_latency += prefill_latency;
         total_decode_latency_per_token += decoding_tatency / (tid_record.output_len - 1);
 

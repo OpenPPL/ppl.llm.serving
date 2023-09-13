@@ -20,6 +20,8 @@
 
 #include "ppl/common/retcode.h"
 #include "ppl/common/threadpool.h"
+#include "ppl/common/barrier.h"
+#include "ppl/common/log.h"
 #include <chrono>
 #include <vector>
 
@@ -34,27 +36,26 @@ inline void DummyTaskDeleter(ppl::common::ThreadTask*) {}
      - has a member function GetRetCode()
  */
 template <typename TaskType, typename... TaskArgType>
-ppl::common::RetCode ParallelExecute(ppl::common::ThreadPool* worker_pool, uint32_t n, TaskArgType&&... rest_args) {
-    auto task_list = (TaskType*)malloc(n * sizeof(TaskType));
-    if (!task_list) {
-        return ppl::common::RC_OUT_OF_MEMORY;
-    }
+ppl::common::RetCode ParallelExecute(ppl::common::StaticThreadPool* pool, TaskArgType&&... rest_args) {
+    auto n = pool->GetNumThreads();
+    ppl::common::Barrier finish_barrier;
+    ppl::common::RetCode thr_rc[n];
+    finish_barrier.Reset(n + 1);
 
+    pool->RunAsync([&](uint32_t nthr, uint32_t ithr) {
+        auto task = TaskType(ithr, std::forward<TaskArgType>(rest_args)...);
+        thr_rc[ithr] = task.Process();
+        finish_barrier.Wait();
+    });
+
+    finish_barrier.Wait();
     for (uint32_t i = 0; i < n; ++i) {
-        new (task_list + i) TaskType(i, std::forward<TaskArgType>(rest_args)...);
-        worker_pool->AddTask(std::shared_ptr<ppl::common::ThreadTask>(task_list + i, DummyTaskDeleter), i);
+        if (thr_rc[i] != ppl::common::RC_SUCCESS)
+            LOG(ERROR) << "ParallelExecute task[" << i << "] failed";
+        return thr_rc[i];
     }
 
-    uint32_t ok_count = 0;
-    for (uint32_t i = 0; i < n; ++i) {
-        task_list[i].Join();
-        ok_count += (task_list[i].GetRetCode() == ppl::common::RC_SUCCESS);
-        task_list[i].~TaskType();
-    }
-
-    free(task_list);
-
-    return ((ok_count == n) ? ppl::common::RC_SUCCESS : ppl::common::RC_OTHER_ERROR);
+    return ppl::common::RC_SUCCESS;
 }
 
 class TimingGuard final {
