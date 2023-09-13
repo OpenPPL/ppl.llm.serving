@@ -23,7 +23,7 @@
 #include "utils/index_manager.h"
 #include "utils/queue_request_scheduler.h"
 #include "utils/sampler.h"
-#include "tokenizer/tokenizer.h"
+#include "utils/tokenizer.h"
 
 #include "ppl/nn/models/onnx/runtime_builder_factory.h"
 #include "ppl/nn/runtime/tensor.h"
@@ -65,7 +65,7 @@ struct WorkerConfig final {
 };
 
 struct TidGenToken final {
-    TidGenToken(uint64_t tid, int token, bool is_last) : tid(tid), token(token), is_last(is_last) {}
+    TidGenToken(uint64_t _tid, int _token, bool _is_last) : tid(_tid), token(_token), is_last(_is_last) {}
     uint64_t tid;
     int token;
     bool is_last;
@@ -178,7 +178,7 @@ private:
     static void* WorkerThreadFunc(void*);
 
 private:
-    const Tokenizer* tokenizer_;
+    const utils::Tokenizer* tokenizer_;
 
     ModelConfig model_config_;
     WorkerConfig worker_config_;
@@ -194,7 +194,7 @@ private:
     std::vector<TidGenToken> tid_gen_token_list_;
 
     ppl::common::StaticThreadPool decoder_thread_pool_;
-    pthread_mutex_t decoder_lock_;
+    ppl::common::Barrier decoder_barrier_;
     pthread_mutex_t tid_shutdown_lock_;
 
     utils::IndexManager idx_mgr_;
@@ -206,6 +206,8 @@ private:
     pthread_t worker_thread_;
 
     pthread_cond_t req_signal_;
+
+    bool is_first_run_ = true;
 
     utils::QueueRequestScheduler<LlamaRequest> sched_;
     pthread_mutex_t uuid_data_lock_;

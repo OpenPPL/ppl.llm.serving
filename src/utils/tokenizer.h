@@ -1,10 +1,10 @@
-#ifndef __PPL_LLM_TOKENIZER_H__
-#define __PPL_LLM_TOKENIZER_H__
+#ifndef __PPL_LLM_UTILS_TOKENIZER_H__
+#define __PPL_LLM_UTILS_TOKENIZER_H__
 
 #include <string>
 #include <vector>
 
-namespace ppl { namespace llm {
+namespace ppl { namespace llm { namespace utils {
 
 class Tokenizer {
 public:
@@ -13,6 +13,6 @@ public:
     virtual bool IsEosId(int token_id) const = 0;
 };
 
-}} // namespace ppl::llm
+}}} // namespace ppl::llm::utils
 
 #endif

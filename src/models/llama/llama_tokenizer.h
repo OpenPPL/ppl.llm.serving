@@ -1,7 +1,7 @@
-#ifndef __PPL_LLM_TOKENIZER_BAICHUAN_H__
-#define __PPL_LLM_TOKENIZER_BAICHUAN_H__
+#ifndef __PPL_LLM_LLAMA_TOKENIZER_H__
+#define __PPL_LLM_LLAMA_TOKENIZER_H__
 
-#include "tokenizer/tokenizer.h"
+#include "utils/tokenizer.h"
 #include "ppl/nn/common/logger.h"
 #include <sentencepiece_processor.h>
 
@@ -9,7 +9,7 @@
 
 namespace ppl { namespace llm {
 
-class BaiChuanTokenizer final : public Tokenizer {
+class LlamaTokenizer final : public utils::Tokenizer {
 public:
     ppl::common::RetCode Init(const std::string& path) {
         auto tokenizer_status = sp_processor_.Load(path);
@@ -23,6 +23,7 @@ public:
     }
 
     void Encode(const char* prompt, uint32_t len, std::vector<int>* token_ids) const override {
+        token_ids->push_back(sp_processor_.bos_id()); // preprocess
         sp_processor_.Encode(std::string_view(prompt, len), token_ids);
     }
 

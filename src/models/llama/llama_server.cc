@@ -19,10 +19,10 @@
 #include "utils/queue_request_scheduler.h"
 #include "utils/utils.h"
 #include "llama_worker.h"
+#include "llama_tokenizer.h"
 #include "resource.h"
 #include "serving/grpc_server.h"
 #include "backends/cuda/sampler.h"
-#include "tokenizer/tokenizer_llama.h"
 
 #include "ppl/common/log.h"
 #include "ppl/common/barrier.h"
