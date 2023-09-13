@@ -4,7 +4,7 @@
 
 `ppl.llm.serving` is a part of `PPL.LLM` system.
 
-![SYSTEM_OVERVIEW](docs/system_overview.png)
+![SYSTEM_OVERVIEW]([docs/system_overview.png](https://github.com/openppl-public/ppl.nn.llm/blob/master/docs/system_overview.png))
 
 **We recommend users who are new to this project to read the [Overview of system](https://github.com/openppl-public/ppl.nn.llm/blob/master/docs/system_overview.md).**
 
