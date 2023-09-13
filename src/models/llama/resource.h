@@ -18,7 +18,7 @@
 #ifndef __PPL_LLM_RESOURCE_H__
 #define __PPL_LLM_RESOURCE_H__
 
-#include "tokenizer/tokenizer.h"
+#include "utils/tokenizer.h"
 #include "utils/sampler.h"
 
 #include "ppl/common/threadpool.h"
@@ -40,7 +40,7 @@ struct Resource final {
     ResourceItem* items = nullptr;
     utils::Sampler* sampler = nullptr;
     ppl::common::StaticThreadPool* device_worker_pool = nullptr;
-    const Tokenizer* tokenizer = nullptr;
+    const utils::Tokenizer* tokenizer = nullptr;
 };
 
 }}} // namespace ppl::llm::llama
