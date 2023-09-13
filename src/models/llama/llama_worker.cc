@@ -75,13 +75,6 @@ struct Profiler final {
     double step_total_duration = 0;
 };
 
-struct TidGenTokens final {
-    TidGenTokens(uint64_t id, const vector<int>& tokens) : tid(id), gen_tokens(tokens) {}
-
-    uint64_t tid;
-    vector<int> gen_tokens;
-};
-
 static void FindUData(unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data, pthread_mutex_t* uuid_data_lock,
                       uint64_t uuid, LLaMAWorker::UuidData* udata, bool should_remove) {
     pthread_mutex_lock(uuid_data_lock);
@@ -95,169 +88,62 @@ static void FindUData(unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data,
     pthread_mutex_unlock(uuid_data_lock);
 }
 
-class TidGenTokenTask final : public JoinableThreadTask {
+class DecodeAndSendTask final {
 public:
-    TidGenTokenTask(uint64_t tid, vector<int>* gen_tokens, unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data,
-                    pthread_mutex_t* uuid_data_lock, const sentencepiece::SentencePieceProcessor* tokenizer,
-                    unordered_set<uint64_t>* tid_shutdown)
-        : tid_(tid)
-        , gen_tokens_(gen_tokens)
+    // range is [start_id, end_id)
+    DecodeAndSendTask(uint32_t start_id, uint32_t end_id, const Tokenizer* tokenizer,
+                      unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data, pthread_mutex_t* uuid_data_lock,
+                      std::vector<TidGenToken>* tid_gen_token_list, pthread_mutex_t* decoder_lock,
+                      pthread_mutex_t* tid_shutdown_lock, unordered_set<uint64_t>* tid_shutdown)
+        : start_id_(start_id)
+        , end_id_(end_id)
+        , tokenizer_(tokenizer)
         , uuid_data_(uuid_data)
         , uuid_data_lock_(uuid_data_lock)
-        , tokenizer_(tokenizer)
+        , tid_gen_token_list_(tid_gen_token_list)
+        , decoder_lock_(decoder_lock)
+        , tid_shutdown_lock_(tid_shutdown_lock)
         , tid_shutdown_(tid_shutdown) {}
 
-protected:
-    bool IsFinished() const override {
-        return is_finished_;
-    }
-
-    shared_ptr<ThreadTask> Process() override {
-        int last_gen_token = gen_tokens_->back();
-        const string& cur_piece = tokenizer_->IdToPiece(last_gen_token);
-        if (gen_tokens_->size() != 1 && cur_piece.substr(0, 3) == "▁") { // normal case
+    RetCode Process() {
+        // for circumstance task_num < thread_num
+        if (start_id_ >= tid_gen_token_list_->size()) {
+            return RC_SUCCESS;
+        }
+        for (uint32_t i = start_id_; i < end_id_; ++i) {
+            const auto& tid_gen_token = tid_gen_token_list_->at(i);
+            uint64_t tid = tid_gen_token.tid;
+            int token = tid_gen_token.token;
             Response rsp;
-            vector<int> new_tokens(gen_tokens_->begin(), gen_tokens_->end() - 1);
-            tokenizer_->Decode(new_tokens, &rsp.generated);
-            LOG(DEBUG) << "task [" << tid_ << "] new word: " << rsp.generated;
-            gen_tokens_->at(0) = last_gen_token;
-            gen_tokens_->resize(1);
-            // send response
+            tokenizer_->Decode(&token, 1, &rsp.generated);
             LLaMAWorker::UuidData udata;
-            FindUData(uuid_data_, uuid_data_lock_, tid_, &udata, false);
+            FindUData(uuid_data_, uuid_data_lock_, tid, &udata, false);
             if (udata.conn) {
                 rsp.id = udata.req_id;
-                rsp.flag = Response::NORMAL;
+                rsp.flag = tid_gen_token.is_last == true ? Response::IS_LAST : Response::NORMAL;
                 udata.conn->Send(rsp);
-            } else
-                tid_shutdown_->insert(tid_);
+            } else {
+                if (!tid_gen_token.is_last) {
+                    pthread_mutex_lock(tid_shutdown_lock_);
+                    tid_shutdown_->insert(tid);
+                    pthread_mutex_unlock(tid_shutdown_lock_);
+                }
+            }
         }
+        pthread_mutex_unlock(decoder_lock_);
 
-        is_finished_ = true;
-        return shared_ptr<ThreadTask>();
+        return RC_SUCCESS;
     }
 
 private:
-    bool is_finished_ = false;
-    const uint64_t tid_;
-    vector<int>* gen_tokens_;
+    uint32_t start_id_;
+    uint32_t end_id_;
+    const Tokenizer* tokenizer_;
     unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data_;
     pthread_mutex_t* uuid_data_lock_;
-    const sentencepiece::SentencePieceProcessor* tokenizer_;
-    unordered_set<uint64_t>* tid_shutdown_;
-};
-
-class LastTidGenTokenTask final : public JoinableThreadTask {
-public:
-    LastTidGenTokenTask(uint64_t tid, const vector<int>* gen_tokens,
-                        unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data, pthread_mutex_t* uuid_data_lock,
-                        const sentencepiece::SentencePieceProcessor* tokenizer)
-        : tid_(tid)
-        , gen_tokens_(gen_tokens)
-        , uuid_data_(uuid_data)
-        , uuid_data_lock_(uuid_data_lock)
-        , tokenizer_(tokenizer) {}
-
-protected:
-    bool IsFinished() const override {
-        return is_finished_;
-    }
-    shared_ptr<ThreadTask> Process() override {
-        Response rsp;
-        tokenizer_->Decode(*gen_tokens_, &rsp.generated);
-        LOG(DEBUG) << "task [" << tid_ << "] last word: " << rsp.generated;
-        LLaMAWorker::UuidData udata;
-        FindUData(uuid_data_, uuid_data_lock_, tid_, &udata, true);
-        if (udata.conn) {
-            rsp.id = udata.req_id;
-            rsp.flag = Response::IS_LAST;
-            udata.conn->Send(rsp);
-        }
-        is_finished_ = true;
-        return shared_ptr<ThreadTask>();
-    }
-
-private:
-    bool is_finished_ = false;
-    const uint64_t tid_;
-    const vector<int>* gen_tokens_;
-    unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data_;
-    pthread_mutex_t* uuid_data_lock_;
-    const sentencepiece::SentencePieceProcessor* tokenizer_;
-};
-
-class DecodeAndSendTask final : public ThreadTask {
-public:
-    DecodeAndSendTask(const sentencepiece::SentencePieceProcessor* tokenizer,
-                      unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data, pthread_mutex_t* uuid_data_lock,
-                      const shared_ptr<unordered_map<uint64_t, vector<int>>>& tid_gen_tokens,
-                      const shared_ptr<vector<TidGenTokens>>& last_tid_gen_tokens, pthread_mutex_t* decoder_lock,
-                      ThreadPool* tp, unordered_set<uint64_t>* tid_shutdown)
-        : uuid_data_(uuid_data)
-        , uuid_data_lock_(uuid_data_lock)
-        , tokenizer_(tokenizer)
-        , tid_gen_tokens_(tid_gen_tokens)
-        , last_tid_gen_tokens_(last_tid_gen_tokens)
-        , decoder_lock_(decoder_lock)
-        , tp_(tp)
-        , tid_shutdown_(tid_shutdown) {}
-
-    shared_ptr<ThreadTask> Run() override {
-        shared_ptr<void> __unlocker(nullptr, [this](void*) -> void {
-            pthread_mutex_unlock(decoder_lock_);
-        });
-
-        auto task_list1 = (TidGenTokenTask*)malloc(tid_gen_tokens_->size() * sizeof(TidGenTokenTask));
-        if (!task_list1) {
-            LOG(ERROR) << "allocate TidGenTokenTask failed.";
-            return shared_ptr<ThreadTask>();
-        }
-
-        auto task_list2 = (LastTidGenTokenTask*)malloc(last_tid_gen_tokens_->size() * sizeof(LastTidGenTokenTask));
-        if (!task_list2) {
-            LOG(ERROR) << "allocate LastTidGenTokenTask failed.";
-            free(task_list1);
-            return shared_ptr<ThreadTask>();
-        }
-
-        uint32_t counter = 0;
-        for (auto t = tid_gen_tokens_->begin(); t != tid_gen_tokens_->end(); ++t) {
-            new (task_list1 + counter)
-                TidGenTokenTask(t->first, &t->second, uuid_data_, uuid_data_lock_, tokenizer_, tid_shutdown_);
-            tp_->AddTask(shared_ptr<ThreadTask>(task_list1 + counter, utils::DummyTaskDeleter));
-            ++counter;
-        }
-
-        for (size_t i = 0; i < last_tid_gen_tokens_->size(); ++i) {
-            auto& tid_info = last_tid_gen_tokens_->at(i);
-            new (task_list2 + i)
-                LastTidGenTokenTask(tid_info.tid, &tid_info.gen_tokens, uuid_data_, uuid_data_lock_, tokenizer_);
-            tp_->AddTask(shared_ptr<ThreadTask>(task_list2 + i, utils::DummyTaskDeleter));
-        }
-
-        for (uint32_t i = 0; i < tid_gen_tokens_->size(); ++i) {
-            task_list1[i].Join();
-            task_list1[i].~TidGenTokenTask();
-        }
-        free(task_list1);
-
-        for (uint32_t i = 0; i < last_tid_gen_tokens_->size(); ++i) {
-            task_list2[i].Join();
-            task_list2[i].~LastTidGenTokenTask();
-        }
-        free(task_list2);
-
-        return shared_ptr<ThreadTask>();
-    }
-
-private:
-    unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data_;
-    pthread_mutex_t* uuid_data_lock_;
-    const sentencepiece::SentencePieceProcessor* tokenizer_;
-    shared_ptr<unordered_map<uint64_t, vector<int>>> tid_gen_tokens_;
-    shared_ptr<vector<TidGenTokens>> last_tid_gen_tokens_;
+    std::vector<TidGenToken>* tid_gen_token_list_;
     pthread_mutex_t* decoder_lock_;
-    ThreadPool* tp_;
+    pthread_mutex_t* tid_shutdown_lock_;
     unordered_set<uint64_t>* tid_shutdown_;
 };
 
@@ -424,7 +310,7 @@ RetCode LLaMAWorker::CheckParameters() const {
     }
 
     if (model_config_.cache_layout != 0 && model_config_.cache_layout != 3) {
-        LOG(ERROR) << "only support cache_layout == 0 && cache_layout == 3";
+        LOG(ERROR) << "only support cache_layout == 0 || cache_layout == 3";
         return RC_INVALID_VALUE;
     }
 
@@ -502,36 +388,9 @@ RetCode LLaMAWorker::Init() {
         return ret;
     }
 
-    for (int i = 0; i < tensor_parallel_size_; i++) {
-        auto arg = &worker_thread_args_[i];
-
-        if (model_config_.cache_layout == 0) {
-            arg->kv_cache->GetShape()->Reshape({(int64_t)kv_cache_max_tokens_, model_config_.num_layers, 2,
-                                                model_config_.num_kv_heads / tensor_parallel_size_,
-                                                model_config_.hidden_dim / model_config_.num_heads});
-            arg->kv_scale->GetShape()->Reshape(
-                {(int64_t)kv_cache_max_tokens_, model_config_.num_layers, 2,
-                model_config_.num_kv_heads / tensor_parallel_size_,
-                model_config_.hidden_dim / model_config_.num_heads / model_config_.cache_quant_group});
-        } else if (model_config_.cache_layout == 3) {
-            arg->kv_cache->GetShape()->Reshape({model_config_.num_layers, 2,
-                                                model_config_.num_kv_heads / tensor_parallel_size_,
-                                                (int64_t)kv_cache_max_tokens_,
-                                                model_config_.hidden_dim / model_config_.num_heads});
-            arg->kv_scale->GetShape()->Reshape(
-                {model_config_.num_layers, 2,
-                model_config_.num_kv_heads / tensor_parallel_size_,
-                (int64_t)kv_cache_max_tokens_,
-                model_config_.hidden_dim / model_config_.num_heads / model_config_.cache_quant_group});
-        } else {
-            LOG(ERROR) << "unsupported cache_layout " << model_config_.cache_layout;
-            return ppl::common::RC_UNSUPPORTED;
-        }
-    }
-
-    ret = decoder_thread_pool_.Init(3);
+    ret = decoder_thread_pool_.Init(DECODER_THREAD_NUM);
     if (ret != RC_SUCCESS) {
-        LOG(ERROR) << "Init Thread Pool error";
+        LOG(ERROR) << "Init decoder thread pool error";
         return RC_OTHER_ERROR;
     }
 
@@ -699,127 +558,100 @@ static void UpdateInput(const unordered_map<uint64_t, TidController>& tid_contro
     }
 }
 
-class SetInputTask final : public JoinableThreadTask {
+class SetInputTask final {
 public:
     SetInputTask(uint32_t id, const WorkerController* wc, WorkerThreadArg* arg_list)
         : id_(id), wc_(wc), arg_list_(arg_list) {}
 
-    inline RetCode GetRetCode() const {
-        return rc_;
-    }
-
-protected:
-    bool IsFinished() const override {
-        return is_finished_;
-    }
-    shared_ptr<ThreadTask> Process() override {
-        shared_ptr<void> change_state(nullptr, [this](void*) -> void {
-            is_finished_ = true;
-        });
-
+    RetCode Process() {
+        RetCode rc;
         // token ids
         arg_list_[id_].token_ids->GetShape()->Reshape({int64_t(wc_->token_inputs.size())});
-        rc_ = arg_list_[id_].token_ids->CopyFromHostAsync(wc_->token_inputs.data());
-        if (rc_ != RC_SUCCESS) {
-            LOG(ERROR) << "set token_ids [" << arg_list_[id_].token_ids->GetName()
-                       << "] failed: " << GetRetCodeStr(rc_);
-            return shared_ptr<ThreadTask>();
+        rc = arg_list_[id_].token_ids->CopyFromHostAsync(wc_->token_inputs.data());
+        if (rc != RC_SUCCESS) {
+            LOG(ERROR) << "set token_ids [" << arg_list_[id_].token_ids->GetName() << "] failed: " << GetRetCodeStr(rc);
+            return rc;
         }
 
         // seq_start
         arg_list_[id_].seq_starts->GetShape()->Reshape({int64_t(wc_->seq_starts.size())});
-        rc_ = arg_list_[id_].seq_starts->CopyFromHostAsync(wc_->seq_starts.data());
-        if (rc_ != RC_SUCCESS) {
+        rc = arg_list_[id_].seq_starts->CopyFromHostAsync(wc_->seq_starts.data());
+        if (rc != RC_SUCCESS) {
             LOG(ERROR) << "set seq_starts [" << arg_list_[id_].seq_starts->GetName()
-                       << "] failed: " << GetRetCodeStr(rc_);
-            return shared_ptr<ThreadTask>();
+                       << "] failed: " << GetRetCodeStr(rc);
+            return rc;
         }
 
         // kv_starts
         arg_list_[id_].kv_starts->GetShape()->Reshape({int64_t(wc_->kv_starts.size())});
-        rc_ = arg_list_[id_].kv_starts->CopyFromHostAsync(wc_->kv_starts.data());
-        if (rc_ != RC_SUCCESS) {
-            LOG(ERROR) << "set kv_starts " << arg_list_[id_].kv_starts->GetName() << " failed: " << GetRetCodeStr(rc_);
-            return shared_ptr<ThreadTask>();
+        rc = arg_list_[id_].kv_starts->CopyFromHostAsync(wc_->kv_starts.data());
+        if (rc != RC_SUCCESS) {
+            LOG(ERROR) << "set kv_starts " << arg_list_[id_].kv_starts->GetName() << " failed: " << GetRetCodeStr(rc);
+            return rc;
         }
 
         // cache_indices
         arg_list_[id_].cache_indices->GetShape()->Reshape({int64_t(wc_->cache_indices.size())});
-        rc_ = arg_list_[id_].cache_indices->CopyFromHostAsync(wc_->cache_indices.data());
-        if (rc_ != RC_SUCCESS) {
+        rc = arg_list_[id_].cache_indices->CopyFromHostAsync(wc_->cache_indices.data());
+        if (rc != RC_SUCCESS) {
             LOG(ERROR) << "set cache_indices [" << arg_list_[id_].cache_indices->GetName()
-                       << "] failed: " << GetRetCodeStr(rc_);
-            return shared_ptr<ThreadTask>();
+                       << "] failed: " << GetRetCodeStr(rc);
+            return rc;
         }
 
         // decoding batches
-        rc_ = arg_list_[id_].decoding_batches->CopyFromHostAsync(&wc_->decoding_batches);
-        if (rc_ != RC_SUCCESS) {
+        rc = arg_list_[id_].decoding_batches->CopyFromHostAsync(&wc_->decoding_batches);
+        if (rc != RC_SUCCESS) {
             LOG(ERROR) << "set decoding_batches [" << arg_list_[id_].decoding_batches->GetName()
-                       << "] failed: " << GetRetCodeStr(rc_);
-            return shared_ptr<ThreadTask>();
+                       << "] failed: " << GetRetCodeStr(rc);
+            return rc;
         }
 
         // start_pos
         arg_list_[id_].start_pos->GetShape()->Reshape({int64_t(wc_->start_pos.size())});
-        rc_ = arg_list_[id_].start_pos->CopyFromHostAsync(wc_->start_pos.data());
-        if (rc_ != RC_SUCCESS) {
-            LOG(ERROR) << "set start_pos [" << arg_list_[id_].start_pos->GetName()
-                       << "] failed: " << GetRetCodeStr(rc_);
-            return shared_ptr<ThreadTask>();
+        rc = arg_list_[id_].start_pos->CopyFromHostAsync(wc_->start_pos.data());
+        if (rc != RC_SUCCESS) {
+            LOG(ERROR) << "set start_pos [" << arg_list_[id_].start_pos->GetName() << "] failed: " << GetRetCodeStr(rc);
+            return rc;
         }
 
         // max_seq_len
-        rc_ = arg_list_[id_].max_seq_len->CopyFromHostAsync(&wc_->max_seq_len);
-        if (rc_ != RC_SUCCESS) {
+        rc = arg_list_[id_].max_seq_len->CopyFromHostAsync(&wc_->max_seq_len);
+        if (rc != RC_SUCCESS) {
             LOG(ERROR) << "set max_seq_len [" << arg_list_[id_].max_seq_len->GetName()
-                       << "] failed: " << GetRetCodeStr(rc_);
-            return shared_ptr<ThreadTask>();
+                       << "] failed: " << GetRetCodeStr(rc);
+            return rc;
         }
 
         // max_kv_len
-        rc_ = arg_list_[id_].max_kv_len->CopyFromHostAsync(&wc_->max_kv_len);
-        if (rc_ != RC_SUCCESS) {
+        rc = arg_list_[id_].max_kv_len->CopyFromHostAsync(&wc_->max_kv_len);
+        if (rc != RC_SUCCESS) {
             LOG(ERROR) << "set max_kv_len [" << arg_list_[id_].max_kv_len->GetName()
-                       << "] failed: " << GetRetCodeStr(rc_);
-            return shared_ptr<ThreadTask>();
+                       << "] failed: " << GetRetCodeStr(rc);
+            return rc;
         }
 
-        rc_ = arg_list_[id_].resource->runtime->Synchronize();
-        return shared_ptr<ThreadTask>();
+        rc = arg_list_[id_].resource->runtime->Synchronize();
+        return rc;
     }
 
 private:
     const uint32_t id_;
     const WorkerController* wc_;
     WorkerThreadArg* arg_list_;
-    RetCode rc_;
-    bool is_finished_ = false;
 };
 
-class RunModelTask final : public JoinableThreadTask {
+class RunModelTask final {
 public:
     RunModelTask(uint32_t id, WorkerThreadArg* arg_list) : id_(id), arg_list_(arg_list) {}
 
-    inline RetCode GetRetCode() const {
-        return rc_;
-    }
-
-protected:
-    bool IsFinished() const override {
-        return is_finished_;
-    }
-    shared_ptr<ThreadTask> Process() override {
-        rc_ = arg_list_[id_].resource->runtime->Run();
-        is_finished_ = true;
-        return shared_ptr<ThreadTask>();
+    RetCode Process() {
+        return arg_list_[id_].resource->runtime->Run();
     }
 
 private:
     const uint32_t id_;
     WorkerThreadArg* arg_list_;
-    RetCode rc_;
-    bool is_finished_ = false;
 };
 
 void LLaMAWorker::Work() {
@@ -829,7 +661,6 @@ void LLaMAWorker::Work() {
     worker_controller_.Reset();
 
     unordered_map<uint64_t, TidController> tid_controllers;
-    auto tid_gen_tokens = make_shared<unordered_map<uint64_t, vector<int>>>();
 
     long long step = 0;
     int cache_cool_down_count = 0;
@@ -904,7 +735,7 @@ void LLaMAWorker::Work() {
         // set inputs tensor
         {
             utils::TimingGuard __timing__(&profiler.step_set_input_duration);
-            rc = utils::ParallelExecute<SetInputTask>(device_worker_pool_, tensor_parallel_size_, &worker_controller_,
+            rc = utils::ParallelExecute<SetInputTask>(device_worker_pool_, &worker_controller_,
                                                       worker_thread_args_.data());
             if (rc != RC_SUCCESS) {
                 LOG(ERROR) << "ParallelExecute(SetInputTask) failed.";
@@ -916,8 +747,7 @@ void LLaMAWorker::Work() {
         // model forward
         {
             utils::TimingGuard __timing__(&profiler.step_model_duration);
-            rc = utils::ParallelExecute<RunModelTask>(device_worker_pool_, tensor_parallel_size_,
-                                                      worker_thread_args_.data());
+            rc = utils::ParallelExecute<RunModelTask>(device_worker_pool_, worker_thread_args_.data());
             if (rc != RC_SUCCESS) {
                 LOG(ERROR) << "ParallelExecute(RunModelTask) failed.";
                 break;
@@ -940,13 +770,12 @@ void LLaMAWorker::Work() {
             }
         }
         profiler.sampling_duration += profiler.step_sampling_duration;
-        profiler.gen_token_cnt += running_batch;
 
         // send stream chat rsp
         {
             utils::TimingGuard __timing__(&profiler.step_send_duration);
             pthread_mutex_lock(&decoder_lock_);
-            auto last_tid_gen_tokens = make_shared<vector<TidGenTokens>>();
+            tid_gen_token_list_.clear();
             for (int task_iter = 0; task_iter < running_batch; ++task_iter) {
                 auto* tid_ctrl = worker_controller_.tid_list[task_iter];
                 int gen_token = gen_tokens[task_iter];
@@ -963,14 +792,12 @@ void LLaMAWorker::Work() {
                 tid_ctrl->passed_iters++;
                 tid_ctrl->rest_iters--;
 
-                auto iter = tid_gen_tokens->emplace(tid_ctrl->tid, vector<int>()).first;
-                iter->second.push_back(gen_token);
-
+                tid_gen_token_list_.emplace_back(tid_ctrl->tid, gen_token, false);
                 // finished task
-                if (tid_ctrl->rest_iters <= 0 || gen_token == tokenizer_->eos_id() ||
-                    worker_controller_.tid_shutdown.find(tid_ctrl->tid) != worker_controller_.tid_shutdown.end()) {
-                    last_tid_gen_tokens->emplace_back(TidGenTokens(tid_ctrl->tid, iter->second));
-                    tid_gen_tokens->erase(iter);
+                bool is_shutdown =
+                    worker_controller_.tid_shutdown.find(tid_ctrl->tid) != worker_controller_.tid_shutdown.end();
+                if (tid_ctrl->rest_iters <= 0 || tokenizer_->IsEosId(gen_token) || is_shutdown) {
+                    tid_gen_token_list_.back().is_last = true;
                     if (cache_cool_down_count > 0)
                         cache_cool_down_count--;
                     worker_controller_.tid_finished.push_back(tid_ctrl->tid);
@@ -978,13 +805,17 @@ void LLaMAWorker::Work() {
             }
             worker_controller_.tid_shutdown.clear();
 
-            auto rc = decoder_thread_pool_.AddTask(make_shared<DecodeAndSendTask>(
-                tokenizer_, &uuid_data_, &uuid_data_lock_, tid_gen_tokens, last_tid_gen_tokens, &decoder_lock_,
-                &decoder_thread_pool_, &worker_controller_.tid_shutdown));
-            if (rc != RC_SUCCESS) {
-                LOG(ERROR) << "decoder_thread_pool_.AddTask() failed: " << GetRetCodeStr(rc);
-                break;
-            }
+            decoder_thread_pool_.RunAsync([this](uint32_t nthr, uint32_t ithr) {
+                size_t task_size = tid_gen_token_list_.size();
+                uint32_t n_block = task_size % nthr == 0 ? task_size / nthr : task_size / nthr + 1;
+                uint32_t start_id = ithr * n_block;
+                uint32_t end_id = (ithr + 1) * n_block > task_size ? task_size : (ithr + 1) * n_block;
+
+                auto task =
+                    DecodeAndSendTask(start_id, end_id, tokenizer_, &uuid_data_, &uuid_data_lock_, &tid_gen_token_list_,
+                                      &decoder_lock_, &tid_shutdown_lock_, &worker_controller_.tid_shutdown);
+                task.Process();
+            });
         }
         profiler.send_duration += profiler.step_send_duration;
 
@@ -1023,8 +854,7 @@ void LLaMAWorker::Process(const shared_ptr<Request>& req, Connection* conn) {
     lreq->uuid = uuid_seq_++;
     lreq->conn = conn;
     lreq->orig = req;
-    lreq->token_id_list.push_back(tokenizer_->bos_id());
-    tokenizer_->Encode(req->prompt, &lreq->token_id_list);
+    tokenizer_->Encode(req->prompt.data(), req->prompt.size(), &lreq->token_id_list);
 
     pthread_mutex_lock(&uuid_data_lock_);
     uuid_data_.insert(make_pair(lreq->uuid, UuidData(req->id, conn)));

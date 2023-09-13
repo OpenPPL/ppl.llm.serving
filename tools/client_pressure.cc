@@ -293,93 +293,87 @@ using namespace ppl::llm;
 ABSL_FLAG(std::string, target, "localhost:50052", "Server address");
 
 class GenerationClient {
- public:
-  GenerationClient(std::shared_ptr<Channel> channel)
-      : stub_(proto::LLMService::NewStub(channel)) {}
+public:
+    GenerationClient(std::shared_ptr<Channel> channel) : stub_(proto::LLMService::NewStub(channel)) {}
 
- // Assembles the client's payload, sends it and presents the response back
-  // from the server.
-  int Generation(int start_tid=0) {
-    // Data we are sending to the server.
-    std::unordered_map<int, std::string> rsp_stream_store;
-    std::unordered_map<int64_t, proto::Request*> tid_map;
+    // Assembles the client's payload, sends it and presents the response back
+    // from the server.
+    int Generation(int start_tid = 0) {
+        // Data we are sending to the server.
+        std::unordered_map<int, std::string> rsp_stream_store;
+        std::unordered_map<int64_t, proto::Request*> tid_map;
 
-    std::vector<proto::Request*> req_queue(prompts.size());
-    
-    for(int i=0; i<prompts.size(); ++i) {
-        proto::Request* req = new proto::Request();
-        req->set_id(start_tid + i);
-        req->set_prompt(prompts[i]);
-        req->set_temperature(0.9);
-        req->set_generation_length(512);
-        // req->set_generation_length(generation_len[i]);
+        std::vector<proto::Request*> req_queue(prompts.size());
 
-        tid_map.emplace(req->id(), req);
+        for (size_t i = 0; i < prompts.size(); ++i) {
+            proto::Request* req = new proto::Request();
+            req->set_id(start_tid + i);
+            req->set_prompt(prompts[i]);
+            req->set_temperature(0.9);
+            req->set_generation_length(512);
+            // req->set_generation_length(generation_len[i]);
 
-        req_queue[i] = req;
-    }
+            tid_map.emplace(req->id(), req);
 
-    int finished_cnt = 0;
-
-    while(!req_queue.empty()) {
-        std::cout << "req_queue.size(): " << req_queue.size() << std::endl;
-        proto::BatchedRequest req_list;
-        for(int i=0; i<req_queue.size(); i++) {
-            auto req = req_list.add_req();
-            req->set_id(req_queue[i]->id());
-            req->set_prompt(req_queue[i]->prompt());
-            req->set_temperature(req_queue[i]->temperature());
-            req->set_generation_length(req_queue[i]->generation_length());
+            req_queue[i] = req;
         }
-        req_queue.clear();
 
-        ClientContext context;
-        std::unique_ptr<ClientReader<proto::Response> > reader(stub_->Generation(&context, req_list));
-        
-        proto::Response rsp;
-        while (reader->Read(&rsp)) {
-            int tid = rsp.id();
-            if (rsp.status() == proto::FAILED) {
-                std::cout << "failed tid: " << tid << std::endl;
-                req_queue.push_back(tid_map.find(tid)->second);
-                continue;
-            } 
+        int finished_cnt = 0;
 
-            if (rsp.status() == proto::FINISHED) {
-                finished_cnt++;
+        while (!req_queue.empty()) {
+            std::cout << "req_queue.size(): " << req_queue.size() << std::endl;
+            proto::BatchedRequest req_list;
+            for (size_t i = 0; i < req_queue.size(); i++) {
+                auto req = req_list.add_req();
+                req->set_id(req_queue[i]->id());
+                req->set_prompt(req_queue[i]->prompt());
+                req->set_temperature(req_queue[i]->temperature());
+                req->set_generation_length(req_queue[i]->generation_length());
             }
+            req_queue.clear();
 
-            std::string rsp_stream = rsp.generated();
-            // std::cout << rsp_stream  << std::endl;
-            rsp_stream_store[tid] += (rsp_stream + " ");
+            ClientContext context;
+            std::unique_ptr<ClientReader<proto::Response> > reader(stub_->Generation(&context, req_list));
+
+            proto::Response rsp;
+            while (reader->Read(&rsp)) {
+                int tid = rsp.id();
+                if (rsp.status() == proto::FAILED) {
+                    std::cout << "failed tid: " << tid << std::endl;
+                    req_queue.push_back(tid_map.find(tid)->second);
+                    continue;
+                }
+
+                if (rsp.status() == proto::FINISHED) {
+                    finished_cnt++;
+                }
+
+                std::string rsp_stream = rsp.generated();
+                // std::cout << rsp_stream  << std::endl;
+                rsp_stream_store[tid] += rsp_stream;
+            }
+            Status status = reader->Finish();
+            if (status.ok()) {
+                std::cout << "Generation rpc succeeded." << std::endl;
+            } else {
+                std::cerr << "Generation rpc failed." << std::endl;
+                return -1;
+            }
         }
-        Status status = reader->Finish();
-        if (status.ok()) {
-            std::cout << "Generation rpc succeeded." << std::endl;
-        } else {
-            std::cerr << "Generation rpc failed." << std::endl;
-            return -1;
+
+        std::cout << "Answer: -----------------" << std::endl;
+        for (auto& rsp : rsp_stream_store) {
+            std::cout << "tid " << rsp.first << ": " << rsp.second << std::endl;
+            std::cout << "--------------------" << std::endl;
         }
+
+        std::cout << "finished cnt: " << finished_cnt << std::endl;
+        return 0;
     }
 
-
-    auto end   = system_clock::now();
-
-    std::cout << "Answer: -----------------" << std::endl;
-    for(auto& rsp : rsp_stream_store) {
-        std::cout << "tid " << rsp.first << ": "<< rsp.second << std::endl;
-        std::cout << "--------------------" << std::endl;
-    }
-
-    std::cout << "finished cnt: " << finished_cnt << std::endl;
-    return 0;
-  }
-
- private:
-  std::unique_ptr<proto::LLMService::Stub> stub_;
+private:
+    std::unique_ptr<proto::LLMService::Stub> stub_;
 };
-
-
 
 int main(int argc, char** argv) {
     if (argc < 2) {
@@ -391,31 +385,9 @@ int main(int argc, char** argv) {
     int start_tid = 0;
     if (argc == 3)
         start_tid = std::stoi(std::string(argv[2]));
-  // We indicate that the channel isn't authenticated (use of
-  // InsecureChannelCredentials()).
-//   const std::string target_str = "localhost:2511";
+
     GenerationClient generator(grpc::CreateChannel(target_str, grpc::InsecureChannelCredentials()));
-//   const std::string prompt("Building a website can be done in 10 simple steps:");
-//   const std::vector<std::string> prompts = {
-//     "Building a website can be done in 10 simple steps:",
-//     "I believe the meaning of life is"
-//   };
 
-
-    // 构造多batch prompt
-    // std::string prompt = "Building a website can be done in 10 simple steps:\n";
-
-    // std::string prompt;
-    // // int input_token_len = 64;
-    // int input_token_len = 128;
-    // for(int i=0; i<input_token_len; i++) {
-    //     prompt += "x";
-    // }
-    // const std::vector<std::string> prompts = {8, prompt};
-
-//   std::cout << "Question: -----------------" << std::endl;
-//   for (auto& str : prompts)
-//     std::cout << str << std::endl;
-  int status = generator.Generation(start_tid);
-  return 0;
+    generator.Generation(start_tid);
+    return 0;
 }
