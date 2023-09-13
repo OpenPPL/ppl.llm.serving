@@ -2,6 +2,12 @@
 
 ## Overview
 
+`ppl.llm.serving` is a part of `PPL.LLM` system.
+
+![SYSTEM_OVERVIEW](https://github.com/openppl-public/ppl.nn.llm/blob/master/docs/system_overview.png)
+
+**We recommend users who are new to this project to read the [Overview of system](https://github.com/openppl-public/ppl.nn.llm/blob/master/docs/system_overview.md).**
+
 `ppl.llm.serving` is a serving based on [ppl.nn.llm](https://github.com/openppl-public/ppl.nn.llm) for various Large Language Models(LLMs). This repository contains a server based on gRPC and inference support for [LLaMA](https://github.com/facebookresearch/llama).
 
 ## Prerequisites
@@ -13,6 +19,8 @@
 * [CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit-archive) >= 11.4. 11.6 recommended. (for CUDA)
 
 ## Quick Start
+
+Here is a brief tutorial, refer to [LLaMA Guide](docs/llama_guide.md) for more details.
 
 * Installing Prerequisites(on Debian or Ubuntu for example)
 
@@ -63,8 +71,6 @@
     ./ppl-build/client_qps_measure 127.0.0.1:23333 /path/to/tokenizer/path tools/samples_1024.json
     ```
     See [tools/client_qps_measure.cc](tools/client_qps_measure.cc) for more details.
-
-Refer to [Documentation](docs/) for more details.
 
 ### License
 
