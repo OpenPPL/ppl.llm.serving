@@ -386,6 +386,7 @@ RetCode LLaMAWorker::Init() {
         LOG(ERROR) << "Init decoder thread pool error";
         return RC_OTHER_ERROR;
     }
+    decoder_barrier_.Reset(DECODER_THREAD_NUM + 1);
 
     pthread_cond_init(&req_signal_, nullptr);
     auto err = pthread_create(&worker_thread_, nullptr, WorkerThreadFunc, this);
