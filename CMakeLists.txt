@@ -77,10 +77,7 @@ endif()
 
 # --------------------------------------------------------------------------- #
 
-# llama after serving and pplnn, depends on libprotobuf
-if(PPL_LLM_ENABLE_LLAMA)
-    include(cmake/llm.cmake)
-endif()
+include(cmake/llm.cmake)
 
 # --------------------------------------------------------------------------- #
 
