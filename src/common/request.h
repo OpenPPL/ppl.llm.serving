@@ -24,6 +24,9 @@
 namespace ppl { namespace llm {
 
 struct Request final {
+    Request() {}
+    Request(uint64_t _id, std::string _prompt, float _temperature, uint32_t _generation_length)
+        : id(_id), prompt(_prompt), temperature(_temperature), generation_length(_generation_length) {}
     uint64_t id;
     std::string prompt;
     float temperature;

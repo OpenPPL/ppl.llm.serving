@@ -15,34 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#ifndef __PPL_LLM_RESOURCE_H__
-#define __PPL_LLM_RESOURCE_H__
+#ifndef __PPL_LLM_PROCESSOR_H__
+#define __PPL_LLM_PROCESSOR_H__
 
-#include "utils/tokenizer.h"
-#include "utils/sampler.h"
+#include "common/request.h"
+#include "common/connection.h"
 
-#include "ppl/common/threadpool.h"
-#include "ppl/nn/runtime/runtime.h"
-#include <vector>
 #include <memory>
 
-namespace ppl { namespace llm { namespace llama {
+namespace ppl { namespace llm {
 
-struct ResourceItem final {
-    void* kv_cache_mem = nullptr;
-    void* kv_scale_mem = nullptr;
-    ppl::nn::Runtime* runtime = nullptr;
+class RequestProcessor {
+public:
+    virtual ~RequestProcessor() {}
+    virtual void Process(const std::shared_ptr<Request>&, Connection*) = 0;
 };
 
-struct Resource final {
-    uint32_t tensor_parallel_size = 0;
-    uint64_t kv_cache_max_tokens = 0;
-    ResourceItem* items = nullptr;
-    utils::Sampler* sampler = nullptr;
-    ppl::common::StaticThreadPool* device_worker_pool = nullptr;
-    const utils::Tokenizer* tokenizer = nullptr;
-};
-
-}}} // namespace ppl::llm::llama
+}} // namespace ppl::llm
 
 #endif

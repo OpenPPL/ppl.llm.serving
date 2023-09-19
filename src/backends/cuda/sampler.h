@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#ifndef __SERVING_SAMPLER_CUDA_SAMPLER_H__
-#define __SERVING_SAMPLER_CUDA_SAMPLER_H__
+#ifndef __PPL_LLM_CUDA_SAMPLER_H__
+#define __PPL_LLM_CUDA_SAMPLER_H__
 
 #include "utils/sampler.h"
 #include <cuda_runtime.h>
