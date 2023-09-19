@@ -70,9 +70,9 @@ int main(int argc, char* argv[]) {
     std::shared_ptr<ppl::llm::utils::Tokenizer> tokenizer;
 
     if (server_config.model_type == "llama") {
-        auto* llama_tokenizer = new llama::LlamaTokenizer();
+        auto llama_tokenizer = std::make_shared<llama::LlamaTokenizer>();
         llama_tokenizer->Init(server_config.tokenizer_path);
-        tokenizer = std::shared_ptr<ppl::llm::utils::Tokenizer>(llama_tokenizer);
+        tokenizer = llama_tokenizer;
     } else {
         LOG(ERROR) << "not supported model: " << server_config.model_type;
         return -1;
@@ -96,7 +96,7 @@ int main(int argc, char* argv[]) {
 
     std::shared_ptr<RequestProcessor> llm_worker;
     if (server_config.model_type == "llama") {
-        auto* llama_worker = new llama::LLaMAWorker(resource, model_config, worker_config);
+        auto llama_worker = std::make_shared<llama::LLaMAWorker>(resource, model_config, worker_config);
         rc = llama_worker->Init();
         if (rc != RC_SUCCESS) {
             LOG(ERROR) << "llama_worker init failed: " << GetRetCodeStr(rc);
@@ -106,7 +106,7 @@ int main(int argc, char* argv[]) {
         svr.SetOnDisconnectedFunc([&llama_worker](Connection* c) {
             llama_worker->ClearTask(c);
         });
-        llm_worker = std::shared_ptr<RequestProcessor>(llama_worker);
+        llm_worker = llama_worker;
     } else {
         LOG(ERROR) << "not supported model: " << server_config.model_type;
         return -1;

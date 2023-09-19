@@ -48,6 +48,7 @@ Here we set server configuration in file `src/models/llama/conf/llama_7b_config_
 
 ```
 {
+    "model_type": "llama",
     "model_dir":  "/model_data/llama_7b_ppl/",
     "model_param_path": "/model_data/llama_7b_ppl/params.json",
 
@@ -61,6 +62,7 @@ Here we set server configuration in file `src/models/llama/conf/llama_7b_config_
     "max_tokens_scale": 0.94,
     "max_tokens_per_request": 4096,
     "max_running_batch": 1024,
+    "max_tokens_per_step": 8192,
 
     "host": "0.0.0.0",
     "port": 23333

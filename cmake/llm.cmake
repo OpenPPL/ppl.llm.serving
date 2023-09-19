@@ -26,14 +26,3 @@ endif()
 if(PPL_LLM_ENABLE_DEBUG)
     target_compile_definitions(ppl_llm_static PUBLIC PPL_LLM_ENABLE_DEBUG)
 endif()
-
-if(PPL_LLM_ENABLE_GRPC_SERVING)
-    add_executable(ppl_llm_server server/llm_server.cc)
-    target_link_libraries(ppl_llm_server PRIVATE
-        ppl_llm_static
-        ppl_llm_grpc_serving_static
-        ${NCCL_LIBRARIES})
-    target_include_directories(ppl_llm_server PRIVATE
-        ${HPCC_DEPS_DIR}/rapidjson/include
-        ${NCCL_INCLUDE_DIRS})
-endif()

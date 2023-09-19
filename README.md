@@ -57,7 +57,7 @@ Here is a brief tutorial, refer to [LLaMA Guide](docs/llama_guide.md) for more d
     - `model_dir`: path of models exported by [ppl.pmx](https://github.com/openppl-public/ppl.pmx).
     - `model_param_path`: params of models. `$model_dir/params.json`.
     - `tokenizer_path`: tokenizer files for `sentencepiece`.
-    
+
 * Running client: send request through gRPC to query the model
 
     ```bash
@@ -71,6 +71,13 @@ Here is a brief tutorial, refer to [LLaMA Guide](docs/llama_guide.md) for more d
     ./ppl-build/client_qps_measure 127.0.0.1:23333 /path/to/tokenizer/path tools/samples_1024.json
     ```
     See [tools/client_qps_measure.cc](tools/client_qps_measure.cc) for more details.
+
+* Running inference offline: 
+    
+    ```bash
+    ./ppl-build/offline_inference /path/to/server/config.json
+    ```
+    See [tools/offline_inference.cc](tools/offline_inference.cc) for more details.
 
 ### License
 
