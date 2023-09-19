@@ -15,32 +15,33 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#ifndef __PPL_LLM_SERVER_H__
-#define __PPL_LLM_SERVER_H__
+#ifndef __PPL_LLM_RESOURCE_H__
+#define __PPL_LLM_RESOURCE_H__
 
-#include "request.h"
-#include "response.h"
+#include "utils/tokenizer.h"
+#include "utils/sampler.h"
+
+#include "ppl/common/threadpool.h"
+#include "ppl/nn/runtime/runtime.h"
+
+#include <vector>
 #include <memory>
 
 namespace ppl { namespace llm {
 
-class Connection {
-public:
-    virtual ~Connection() {}
-    virtual void Send(const Response&) = 0;
-    virtual void NotifyFailure(uint64_t id) = 0;
+struct ResourceItem final {
+    void* kv_cache_mem = nullptr;
+    void* kv_scale_mem = nullptr;
+    ppl::nn::Runtime* runtime = nullptr;
 };
 
-class RequestProcessor {
-public:
-    virtual ~RequestProcessor() {}
-    virtual void Process(const std::shared_ptr<Request>&, Connection*) = 0;
-};
-
-class Server {
-public:
-    virtual ~Server() {}
-    virtual void Loop(RequestProcessor*) = 0;
+struct Resource final {
+    uint32_t tensor_parallel_size = 0;
+    uint64_t kv_cache_max_tokens = 0;
+    ResourceItem* items = nullptr;
+    utils::Sampler* sampler = nullptr;
+    ppl::common::StaticThreadPool* device_worker_pool = nullptr;
+    const utils::Tokenizer* tokenizer = nullptr;
 };
 
 }} // namespace ppl::llm

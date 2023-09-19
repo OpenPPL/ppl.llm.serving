@@ -18,8 +18,9 @@
 #ifndef __PPL_LLM_LLAMA_WORKER_H__
 #define __PPL_LLM_LLAMA_WORKER_H__
 
-#include "resource.h"
-#include "common/server.h"
+#include "common/processor.h"
+#include "models/config.h"
+#include "models/resource.h"
 #include "utils/index_manager.h"
 #include "utils/queue_request_scheduler.h"
 #include "utils/sampler.h"
@@ -35,34 +36,6 @@
 #include <unordered_set>
 
 namespace ppl { namespace llm { namespace llama {
-
-struct ModelConfig final {
-    int hidden_dim;
-    int intermediate_dim;
-    int num_layers;
-    int num_heads;
-    int num_kv_heads;
-    int vocab_size;
-
-    float norm_eps; // not used
-
-    int cache_quant_bit;
-    int cache_quant_group;
-
-    int cache_layout;
-    int cache_mode;
-
-    bool dynamic_batching;
-    bool auto_causal;
-};
-
-struct WorkerConfig final {
-    float top_p;
-    int top_k;
-
-    int max_tokens_per_request;
-    int max_running_batch;
-};
 
 struct TidGenToken final {
     TidGenToken(uint64_t _tid, int _token, bool _is_last) : tid(_tid), token(_token), is_last(_is_last) {}
@@ -217,7 +190,7 @@ private:
 
 private:
     static constexpr int DECODER_THREAD_NUM = 2;
-    
+
 private:
     LLaMAWorker(const LLaMAWorker&) = delete;
     void operator=(const LLaMAWorker&) = delete;

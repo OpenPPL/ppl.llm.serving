@@ -1,8 +1,9 @@
 {
+    "model_type": "llama",
     "model_dir":  "/path/to/model/dir",
     "model_param_path": "/path/to/model/dir/params.json",
 
-    "tokenizer_path": "/path/to/tokenizer/path",
+    "tokenizer_path": "/path/to/tokenizer/tokenizer.model",
 
     "tensor_parallel_size": 2,
 
@@ -12,6 +13,7 @@
     "max_tokens_scale": 0.93,
     "max_tokens_per_request": 4096,
     "max_running_batch": 1024,
+    "max_tokens_per_step": 8192,
 
     "host": "0.0.0.0",
     "port": 23333

@@ -16,9 +16,13 @@
 // under the License.
 
 #include "grpc_server.h"
+#include "common/connection.h"
 #include "utils/queue_request_scheduler.h"
+
 #include "ppl/common/log.h"
+
 #include <list>
+
 using namespace std;
 using namespace ppl::common;
 using namespace grpc;

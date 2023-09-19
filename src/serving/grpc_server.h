@@ -18,10 +18,12 @@
 #ifndef __SERVING_GRPC_SERVER_H__
 #define __SERVING_GRPC_SERVER_H__
 
+#include "common/processor.h"
+
 #include "llm.grpc.pb.h"
 #include "grpcpp/grpcpp.h"
-#include "common/server.h"
 #include "ppl/common/retcode.h"
+
 #include <pthread.h>
 #include <map>
 #include <functional>
@@ -30,12 +32,12 @@ namespace ppl { namespace llm {
 
 struct GRPCConnection;
 
-class GRPCServer final : public Server {
+class GRPCServer final {
 public:
     GRPCServer();
     ~GRPCServer();
     ppl::common::RetCode Init(const std::string& addr);
-    void Loop(RequestProcessor*) override;
+    void Loop(RequestProcessor*);
 
     void SetOnDisconnectedFunc(const std::function<void(Connection*)>& f) {
         arg_.on_disconnected_func = f;

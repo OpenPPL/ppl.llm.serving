@@ -19,10 +19,13 @@
 #define __PPL_LLM_UTILS_H__
 
 #include "ppl/common/retcode.h"
+#include "ppl/common/log.h"
 #include "ppl/common/threadpool.h"
 #include "ppl/common/barrier.h"
-#include "ppl/common/log.h"
+
 #include <chrono>
+#include <fstream>
+#include <string>
 #include <vector>
 
 namespace ppl { namespace llm { namespace utils {

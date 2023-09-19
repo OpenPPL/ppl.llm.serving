@@ -93,8 +93,8 @@ public:
     // range is [start_id, end_id)
     DecodeAndSendTask(uint32_t start_id, uint32_t end_id, const utils::Tokenizer* tokenizer,
                       unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data, pthread_mutex_t* uuid_data_lock,
-                      std::vector<TidGenToken>* tid_gen_token_list,
-                      pthread_mutex_t* tid_shutdown_lock, unordered_set<uint64_t>* tid_shutdown)
+                      std::vector<TidGenToken>* tid_gen_token_list, pthread_mutex_t* tid_shutdown_lock,
+                      unordered_set<uint64_t>* tid_shutdown)
         : start_id_(start_id)
         , end_id_(end_id)
         , tokenizer_(tokenizer)
@@ -403,6 +403,7 @@ struct RequestCheckResult final {
     int64_t cache_index;
     int rest_iters;
     int first_fill_len;
+    int max_tokens_per_step;
 };
 
 static bool ParseRequest(const LlamaRequest& req, const RequestCheckResult& check_res,
@@ -425,7 +426,7 @@ static bool ParseRequest(const LlamaRequest& req, const RequestCheckResult& chec
     tid_ctrl.first_fill_len = check_res.first_fill_len;
     tid_ctrl.total_len = check_res.first_fill_len + check_res.rest_iters;
     tid_ctrl.cache_index = check_res.cache_index;
-    tid_ctrl.next_tokens = std::move(req.token_id_list);
+    tid_ctrl.next_tokens = req.token_id_list;
 
     worker_controller->tid_list.push_back(&tid_ctrl);
     worker_controller->start_pos.push_back(0);
@@ -656,14 +657,19 @@ void LLaMAWorker::Work() {
 
     unordered_map<uint64_t, TidController> tid_controllers;
 
+    int running_batch = 0;
     long long step = 0;
     int cache_cool_down_count = 0;
-
     RequestCheckResult check_res;
     auto check_func = [this, &check_res, &cache_cool_down_count](const LlamaRequest& req) -> bool {
         check_res.cache_index = INT64_MAX;
         check_res.rest_iters = -1;
         check_res.first_fill_len = req.token_id_list.size();
+        check_res.max_tokens_per_step += check_res.first_fill_len;
+
+        if (check_res.max_tokens_per_step > worker_config_.max_tokens_per_step) {
+            return false;
+        }
 
         if (check_res.first_fill_len + req.orig->generation_length > (size_t)worker_config_.max_tokens_per_request) {
             check_res.rest_iters = worker_config_.max_tokens_per_request - check_res.first_fill_len;
@@ -689,7 +695,7 @@ void LLaMAWorker::Work() {
         // Recv and Parse Requset
         auto global_start = std::chrono::high_resolution_clock::now();
 
-        int running_batch = 0;
+        check_res.max_tokens_per_step = running_batch;
         {
             utils::TimingGuard __timing__(&profiler.step_prepare_duration);
             if (worker_controller_.tid_list.size() < (size_t)worker_config_.max_running_batch &&
