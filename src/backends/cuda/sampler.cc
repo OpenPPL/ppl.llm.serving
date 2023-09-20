@@ -48,7 +48,7 @@ RetCode Sampler::SampleTopPTopK(const float* logits_device, const float* tempera
     cudaError_t err;
 
     if (top_k != 1) {
-        LOG(ERROR) << "currently only support top_p == 0 and top_k == 1";
+        LOG(ERROR) << "currently only support top_k == 1";
         return RC_UNSUPPORTED;
     }
 
