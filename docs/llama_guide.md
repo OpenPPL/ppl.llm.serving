@@ -11,18 +11,18 @@ Here we save downloaded file in folder `/model_data/llama_fb/`.
 
 Convert through our pmx, following [guide](https://github.com/openppl-public/ppl.pmx/blob/master/model_zoo/llama/facebook/README.md). Here we use llama_7b for example, exporting model in `/model_data/llama_fb/7B/`.
 
-    ```bash
-    git clone https://github.com/openppl-public/ppl.pmx.git
-    cd ppl.pmx/model_zoo/llama/facebook
-    pip install -r requirements.txt # requirements
-    MP=1
-    OMP_NUM_THREADS=${MP} torchrun --nproc_per_node ${MP} \
-    Export.py --ckpt_dir /model_data/llama_fb/7B/ \
-    --tokenizer_path /model_data/llama_fb/tokenizer.model \
-    --export_path /model_data/llama_7b_ppl/ \
-    --fused_qkv 1 --fused_kvcache 1 --auto_causal 1 \
-    --quantized_cache 1 --dynamic_batching 1 
-    ```
+```bash
+git clone https://github.com/openppl-public/ppl.pmx.git
+cd ppl.pmx/model_zoo/llama/facebook
+pip install -r requirements.txt # requirements
+MP=1
+OMP_NUM_THREADS=${MP} torchrun --nproc_per_node ${MP} \
+Export.py --ckpt_dir /model_data/llama_fb/7B/ \
+--tokenizer_path /model_data/llama_fb/tokenizer.model \
+--export_path /model_data/llama_7b_ppl/ \
+--fused_qkv 1 --fused_kvcache 1 --auto_causal 1 \
+--quantized_cache 1 --dynamic_batching 1 
+```
 Differenct model require different MP values, for llama_7b `MP=1`.
 | MP                   | value |
 |----------------------|-------|
@@ -84,7 +84,7 @@ where params `model_dir`, `model_param_path` and `tokenizer_path` is from step 1
 
 Launch server with configuration file in step 4.
 ```bash
-./ppl-build/ppl_llama_server src/models/llama/conf/llama_7b_config_example.json
+./ppl-build/ppl_llm_server src/models/llama/conf/llama_7b_config_example.json
 ```
 
 6. Launch client
