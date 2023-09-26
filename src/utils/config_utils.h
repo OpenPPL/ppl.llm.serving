@@ -134,6 +134,7 @@ bool ParseServerConfig(const std::string& config_file, ServerConfig* server_conf
     LOG(INFO) << "server_config.host: " << server_config->host;
     LOG(INFO) << "server_config.port: " << server_config->port;
 
+    LOG(INFO) << "server_config.model_type: " << server_config->model_type;
     LOG(INFO) << "server_config.model_dir: " << server_config->model_dir;
     LOG(INFO) << "server_config.model_param_path: " << server_config->model_param_path;
     LOG(INFO) << "server_config.tokenizer_path: " << server_config->tokenizer_path;

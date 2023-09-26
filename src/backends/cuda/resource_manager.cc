@@ -181,7 +181,7 @@ private:
     CudaResourceManager* mgr_;
 };
 
-std::shared_ptr<ppl::llm::utils::Sampler> CudaResourceManager::CreateCudaSampler(Runtime* runtime) {
+std::unique_ptr<ppl::llm::utils::Sampler> CudaResourceManager::CreateCudaSampler(Runtime* runtime) {
     DeviceContext::Type needed_type;
     *((int64_t*)needed_type.str) = 0;
     needed_type.str[0] = 'c';
@@ -199,17 +199,17 @@ std::shared_ptr<ppl::llm::utils::Sampler> CudaResourceManager::CreateCudaSampler
 
     if (!dev) {
         LOG(ERROR) << "cannot find cuda device in runtime.";
-        return std::shared_ptr<ppl::llm::utils::Sampler>();
+        return std::unique_ptr<ppl::llm::utils::Sampler>();
     }
 
     cudaStream_t stream;
     auto rc = dev->Configure(ppl::nn::llm::cuda::DEV_CONF_GET_STREAM, &stream);
     if (rc != RC_SUCCESS) {
         LOG(ERROR) << "Configure ppl::nn::llm::cuda::DEV_CONF_GET_STREAM failed: " << GetRetCodeStr(rc);
-        return std::shared_ptr<ppl::llm::utils::Sampler>();
+        return std::unique_ptr<ppl::llm::utils::Sampler>();
     }
 
-    return std::make_shared<Sampler>(stream);
+    return std::make_unique<Sampler>(stream);
 }
 
 RetCode CudaResourceManager::Init(const ModelConfig& model_config, const ServerConfig& server_config) {
