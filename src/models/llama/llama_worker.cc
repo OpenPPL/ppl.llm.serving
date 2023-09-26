@@ -565,7 +565,7 @@ void LLaMAWorker::DeleteTask(const vector<uint64_t>& finished_list,
         worker_controller_.start_pos[task_iter] = INT64_MAX;
         worker_controller_.temperatures[task_iter] = 0.0f;
 
-        idx_mgr_.Free(tid_ctrl.cache_index, tid_ctrl.total_len);
+        idx_mgr_.Free(tid_ctrl.cache_index, tid_ctrl.total_len - 1);
         tid_controllers->erase(tid_it);
     }
     // update rest iter, for eos and shutdown finished
