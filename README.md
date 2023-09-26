@@ -68,9 +68,9 @@ Here is a brief tutorial, refer to [LLaMA Guide](docs/llama_guide.md) for more d
 * Benchmarking
 
     ```bash
-    ./ppl-build/client_qps_measure 127.0.0.1:23333 /path/to/tokenizer/path tools/samples_1024.json
+    ./ppl-build/client_qps_measure --target=127.0.0.1:23333 --tokenizer=/path/to/tokenizer/path --dataset=tools/samples_1024.json --request_rate=inf
     ```
-    See [tools/client_qps_measure.cc](tools/client_qps_measure.cc) for more details.
+    See [tools/client_qps_measure.cc](tools/client_qps_measure.cc) for more details. `--request_rate` is the number of request per second, and value `inf` means send all client request with no interval.
 
 * Running inference offline: 
     
