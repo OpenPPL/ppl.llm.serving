@@ -37,6 +37,8 @@ namespace ppl { namespace llm { namespace cuda {
 
 struct CudaResourceManager final {
     ~CudaResourceManager() {
+        sampler.reset();
+        
         for (auto it = items.begin(); it != items.end(); ++it) {
             cudaFree(it->kv_cache_mem);
             cudaFree(it->kv_scale_mem);
@@ -46,18 +48,21 @@ struct CudaResourceManager final {
         engine_list.clear();
 
         for (auto it = nccl_comm_list.begin(); it != nccl_comm_list.end(); ++it) {
-            ncclCommDestroy(*it);
+            auto e = ncclCommDestroy(*it);
+            if (e != ncclSuccess) {
+                LOG(ERROR) << "NCCL error(code:" << (int)e << ") on " << "(ncclCommDestroy)";
+            }
         }
     }
 
-    std::shared_ptr<ppl::llm::utils::Sampler> CreateCudaSampler(ppl::nn::Runtime* runtime);
+    std::unique_ptr<ppl::llm::utils::Sampler> CreateCudaSampler(ppl::nn::Runtime* runtime);
     ppl::common::RetCode Init(const ModelConfig& model_config, const ServerConfig& server_config);
 
     std::vector<ncclComm_t> nccl_comm_list;
     ppl::common::StaticThreadPool device_worker_pool;
     std::vector<std::unique_ptr<ppl::nn::Engine>> engine_list;
     std::vector<ppl::llm::ResourceItem> items;
-    std::shared_ptr<ppl::llm::utils::Sampler> sampler;
+    std::unique_ptr<ppl::llm::utils::Sampler> sampler;
     uint64_t kv_cache_max_tokens;
 };
 

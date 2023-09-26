@@ -179,6 +179,7 @@ static void PrintProfilingMsg(const Profiler& profiler, int step, int running_ba
 #endif
 
 #ifdef PPL_LLM_ENABLE_DEBUG
+#include <unistd.h>
 template <class T>
 static void PrintVector(vector<T> vec) {
     for (auto& ele : vec) {
@@ -292,6 +293,43 @@ static bool SaveInputsOneByOne(const Runtime* runtime, const string& tag = "") {
 
     return true;
 }
+
+static void PrintInputInfo(const Runtime* runtime) {
+    LOG(INFO) << "----- input info -----";
+    for (uint32_t i = 0; i < runtime->GetInputCount(); ++i) {
+        auto tensor = runtime->GetInputTensor(i);
+        LOG(INFO) << "input[" << i << "]:";
+        LOG(INFO) << "    name: " << tensor->GetName();
+
+        string dims_str;
+        auto shape = tensor->GetShape();
+        for (uint32_t j = 0; j < shape->GetDimCount(); ++j) {
+            dims_str += " " + ToString(shape->GetDim(j));
+        }
+        LOG(INFO) << "    dim(s):" << dims_str;
+
+        LOG(INFO) << "    data type: " << GetDataTypeStr(shape->GetDataType());
+        LOG(INFO) << "    data format: " << GetDataFormatStr(shape->GetDataFormat());
+        LOG(INFO) << "    byte(s) excluding padding: " << shape->CalcBytesExcludingPadding();
+        LOG(INFO) << "    buffer address: " << tensor->GetBufferPtr();
+
+        const int64_t elem_count = tensor->GetShape()->CalcElementsExcludingPadding();
+        if (tensor->GetShape()->GetDataType() == ppl::common::DATATYPE_INT64 && elem_count <= 16) {
+            std::vector<int64_t> vals(elem_count, 0);
+            if (ppl::common::RC_SUCCESS != tensor->CopyToHost(vals.data())) {
+                LOG(ERROR) << "[" << tensor->GetName() << "] CopyToHost FAILED";
+            } else {
+                std::string val_str = "";
+                for (uint32_t j = 0; j < elem_count; ++j) {
+                    val_str += std::to_string(vals[j]) + " ";
+                }
+                LOG(INFO) << "    value(s): " << val_str;
+            }
+        }
+    }
+
+    LOG(INFO) << "----------------------";
+}
 #endif
 
 RetCode LLaMAWorker::CheckParameters() const {
@@ -379,6 +417,29 @@ RetCode LLaMAWorker::Init() {
     if (ret != RC_SUCCESS) {
         LOG(ERROR) << "CheckParameters failed.";
         return ret;
+    }
+
+    for (int i = 0; i < tensor_parallel_size_; i++) {
+        auto arg = &worker_thread_args_[i];
+        if (model_config_.cache_layout == 0) {
+            arg->kv_cache->GetShape()->Reshape({(int64_t)kv_cache_max_tokens_, model_config_.num_layers, 2,
+                                                model_config_.num_kv_heads / tensor_parallel_size_,
+                                                model_config_.hidden_dim / model_config_.num_heads});
+            arg->kv_scale->GetShape()->Reshape(
+                {(int64_t)kv_cache_max_tokens_, model_config_.num_layers, 2,
+                 model_config_.num_kv_heads / tensor_parallel_size_,
+                 model_config_.hidden_dim / model_config_.num_heads / model_config_.cache_quant_group});
+        } else if (model_config_.cache_layout == 3) {
+            arg->kv_cache->GetShape()->Reshape(
+                {model_config_.num_layers, 2, model_config_.num_kv_heads / tensor_parallel_size_,
+                 (int64_t)kv_cache_max_tokens_, model_config_.hidden_dim / model_config_.num_heads});
+            arg->kv_scale->GetShape()->Reshape(
+                {model_config_.num_layers, 2, model_config_.num_kv_heads / tensor_parallel_size_,
+                 (int64_t)kv_cache_max_tokens_,
+                 model_config_.hidden_dim / model_config_.num_heads / model_config_.cache_quant_group});
+        } else {
+            LOG(ERROR) << "impossible status: cache_layout = [" << model_config_.cache_layout << "]";
+        }
     }
 
     ret = decoder_thread_pool_.Init(DECODER_THREAD_NUM);
@@ -627,6 +688,10 @@ public:
         }
 
         rc = arg_list_[id_].resource->runtime->Synchronize();
+        if (rc != RC_SUCCESS) {
+            LOG(ERROR) << "set input tensor synchronize fail";
+            return rc;
+        }
         return rc;
     }
 
@@ -681,7 +746,7 @@ void LLaMAWorker::Work() {
             return true;
         }
 
-        check_res.cache_index = idx_mgr_.Alloc(check_res.first_fill_len + check_res.rest_iters);
+        check_res.cache_index = idx_mgr_.Alloc(check_res.first_fill_len + check_res.rest_iters - 1);
 
         if (check_res.cache_index == INT64_MAX) {
             cache_cool_down_count = std::min(std::max(1, (int)floorf(worker_controller_.tid_list.size() * 0.1f)), 8);
@@ -770,6 +835,7 @@ void LLaMAWorker::Work() {
             }
         }
         profiler.sampling_duration += profiler.step_sampling_duration;
+        profiler.gen_token_cnt += running_batch;
 
         // send stream chat rsp
         {
