@@ -1,5 +1,11 @@
-#include <grpc++/grpc++.h>
-#include <sentencepiece_processor.h>
+#include "simple_flags.h"
+
+#include "llm.grpc.pb.h"
+#include "ppl/common/log.h"
+#include "rapidjson/document.h"
+#include "rapidjson/istreamwrapper.h"
+#include "grpc++/grpc++.h"
+#include "sentencepiece_processor.h"
 
 #include <chrono>
 #include <fstream>
@@ -8,13 +14,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
-
-#include "absl/flags/flag.h"
-#include "absl/flags/parse.h"
-#include "llm.grpc.pb.h"
-#include "ppl/common/log.h"
-#include "rapidjson/document.h"
-#include "rapidjson/istreamwrapper.h"
+#include <random>
 
 using namespace grpc;
 using grpc::Channel;
@@ -28,6 +28,14 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static std::unordered_map<int, std::string> rsp_stream_store;
 static int finished_cnt = 0;
 static int num_request = 0;
+
+Define_string_opt("--target", g_flag_target, "localhost:23333", "ip:port");
+Define_string_opt("--tokenizer", g_flag_tokenizer, "", "Path to the tokenizer");
+Define_string_opt("--dataset", g_flag_dataset, "", "Path to the dataset.");
+Define_string_opt("--request_rate", g_flag_request_rate, "inf",
+                  "Number of request per second. If this is inf, then all the requests are sent at time 0. Otherwise, "
+                  "we use Poisson process to synthesize the request arrival times.");
+
 struct TidRecord {
     int prompt_len;
     int output_len;
@@ -80,12 +88,25 @@ public:
     GenerationClientAsync(std::shared_ptr<Channel> channel) : stub_(proto::LLMService::NewStub(channel)) {}
 
     void Generation(const std::vector<std::shared_ptr<proto::BatchedRequest>> req_list) {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+
         for (size_t i = 0; i < req_list.size(); i++) {
             const auto& req_batch = *req_list[i];
             AsyncClientCall* call = new AsyncClientCall;
 
             call->response_reader = stub_->PrepareAsyncGeneration(&call->context, req_batch, &cq_);
             call->response_reader->StartCall((void*)call);
+
+            if (g_flag_request_rate == "inf") { // continuous send, no interval
+                continue;
+            }
+            float request_rate = std::stof(g_flag_request_rate);
+            std::exponential_distribution<> dist(request_rate);
+            float sleep_time = dist(gen);
+            int sleep_s = int(sleep_time);
+            int sleep_us = (sleep_time - float(sleep_s)) * 1000000;
+            std::this_thread::sleep_for(std::chrono::microseconds(sleep_s * 1000000 + sleep_us));
         }
         pthread_mutex_lock(&lock);
         while (finished_cnt < num_request) {
@@ -174,14 +195,22 @@ private:
     CompletionQueue cq_;
 };
 
-int main(int argc, char const* argv[]) {
-    if (argc < 4) {
-        std::cerr << "usage: " << argv[0] << " host:port tokenizer_path samples_json_path" << std::endl;
+int main(int argc, char* argv[]) {
+    simple_flags::parse_args(argc, argv);
+    if (!simple_flags::get_unknown_flags().empty()) {
+        string content;
+        for (auto it : simple_flags::get_unknown_flags()) {
+            content += "'" + it + "', ";
+        }
+        content.resize(content.size() - 2); // remove last ', '
+        content.append(".");
+        LOG(ERROR) << "unknown option(s): " << content.c_str();
         return -1;
     }
-    const std::string target_str = argv[1];
-    const std::string tokenizer_path = argv[2]; // LLaMA/tokenizer.model
-    const std::string data_path = argv[3]; // ./samples_1024.json
+
+    const std::string target_str = g_flag_target;
+    const std::string tokenizer_path = g_flag_tokenizer; // LLaMA/tokenizer.model
+    const std::string data_path = g_flag_dataset; // samples_1024.json
 
     sentencepiece::SentencePieceProcessor tokenizer;
     const auto tokenizer_status = tokenizer.Load(tokenizer_path);
