@@ -21,7 +21,6 @@
 #include "ppl/common/retcode.h"
 #include "ppl/common/log.h"
 #include "ppl/common/threadpool.h"
-#include "ppl/common/barrier.h"
 
 #include <chrono>
 #include <fstream>
@@ -41,17 +40,13 @@ inline void DummyTaskDeleter(ppl::common::ThreadTask*) {}
 template <typename TaskType, typename... TaskArgType>
 ppl::common::RetCode ParallelExecute(ppl::common::StaticThreadPool* pool, TaskArgType&&... rest_args) {
     auto n = pool->GetNumThreads();
-    ppl::common::Barrier finish_barrier;
     ppl::common::RetCode thr_rc[n];
-    finish_barrier.Reset(n + 1);
 
-    pool->RunAsync([&](uint32_t nthr, uint32_t ithr) {
+    pool->Run([&](uint32_t nthr, uint32_t ithr) {
         auto task = TaskType(ithr, std::forward<TaskArgType>(rest_args)...);
         thr_rc[ithr] = task.Process();
-        finish_barrier.Wait();
     });
 
-    finish_barrier.Wait();
     for (uint32_t i = 0; i < n; ++i) {
         if (thr_rc[i] != ppl::common::RC_SUCCESS)
             LOG(ERROR) << "ParallelExecute task[" << i << "] failed";

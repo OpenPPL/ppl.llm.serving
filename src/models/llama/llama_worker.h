@@ -167,7 +167,6 @@ private:
     std::vector<TidGenToken> tid_gen_token_list_;
 
     ppl::common::StaticThreadPool decoder_thread_pool_;
-    ppl::common::Barrier decoder_barrier_;
     pthread_mutex_t tid_shutdown_lock_;
 
     utils::IndexManager idx_mgr_;
@@ -179,8 +178,6 @@ private:
     pthread_t worker_thread_;
 
     pthread_cond_t req_signal_;
-
-    bool is_first_run_ = true;
 
     utils::QueueRequestScheduler<LlamaRequest> sched_;
     pthread_mutex_t uuid_data_lock_;
