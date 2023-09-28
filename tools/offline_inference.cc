@@ -38,7 +38,7 @@ using namespace ppl::llm;
 using namespace ppl::common;
 using namespace ppl::nn;
 
-vector<string> prompts = {
+const static vector<string> prompts = {
     "Hello, my name is",
     "The president of the United States is",
     "The capital of France is",
@@ -52,7 +52,10 @@ public:
         pthread_cond_init(&finish_signal_, nullptr);
     }
 
-    ~LocalConnection() {}
+    ~LocalConnection() {
+        pthread_cond_destroy(&finish_signal_);
+        pthread_mutex_destroy(&finish_lock_);
+    }
 
     void Send(const Response& rsp) override {
         auto& rsp_str = tid_rsp_map_->emplace(rsp.id, std::string()).first->second;

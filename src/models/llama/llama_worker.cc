@@ -447,7 +447,6 @@ RetCode LLaMAWorker::Init() {
         LOG(ERROR) << "Init decoder thread pool error";
         return RC_OTHER_ERROR;
     }
-    decoder_barrier_.Reset(DECODER_THREAD_NUM + 1);
 
     pthread_cond_init(&req_signal_, nullptr);
     auto err = pthread_create(&worker_thread_, nullptr, WorkerThreadFunc, this);
@@ -756,6 +755,8 @@ void LLaMAWorker::Work() {
         return true;
     };
 
+    decoder_thread_pool_.RunAsync([](uint32_t, uint32_t) {});
+
     while (true) {
         // Recv and Parse Requset
         auto global_start = std::chrono::high_resolution_clock::now();
@@ -814,7 +815,7 @@ void LLaMAWorker::Work() {
             utils::TimingGuard __timing__(&profiler.step_model_duration);
             rc = utils::ParallelExecute<RunModelTask>(device_worker_pool_, worker_thread_args_.data());
             if (rc != RC_SUCCESS) {
-                LOG(ERROR) << "ParallelExecute(RunModelTask) failed.";
+                LOG(ERROR) << "ParallelExecute(RunModelTask) failed: " << GetRetCodeStr(rc);
                 break;
             }
         }
@@ -840,11 +841,8 @@ void LLaMAWorker::Work() {
         // send stream chat rsp
         {
             utils::TimingGuard __timing__(&profiler.step_send_duration);
-            if (is_first_run_) {
-                is_first_run_ = false;
-            } else {
-                decoder_barrier_.Wait();
-            }
+            decoder_thread_pool_.Wait();
+
             tid_gen_token_list_.clear();
             for (int task_iter = 0; task_iter < running_batch; ++task_iter) {
                 auto* tid_ctrl = worker_controller_.tid_list[task_iter];
@@ -885,7 +883,6 @@ void LLaMAWorker::Work() {
                     DecodeAndSendTask(start_id, end_id, tokenizer_, &uuid_data_, &uuid_data_lock_, &tid_gen_token_list_,
                                       &tid_shutdown_lock_, &worker_controller_.tid_shutdown);
                 task.Process();
-                decoder_barrier_.Wait();
             });
         }
         profiler.send_duration += profiler.step_send_duration;
@@ -918,6 +915,8 @@ void LLaMAWorker::Work() {
         }
 #endif
     }
+
+    decoder_thread_pool_.Wait();
 }
 
 void LLaMAWorker::Process(const shared_ptr<Request>& req, Connection* conn) {
