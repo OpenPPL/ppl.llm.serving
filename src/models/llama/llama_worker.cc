@@ -665,11 +665,10 @@ void LLaMAWorker::Work() {
         check_res.cache_index = INT64_MAX;
         check_res.rest_iters = -1;
         check_res.first_fill_len = req.token_id_list.size();
-        check_res.max_tokens_per_step += check_res.first_fill_len;
-
         if (check_res.max_tokens_per_step > worker_config_.max_tokens_per_step) {
             return false;
         }
+        check_res.max_tokens_per_step += check_res.first_fill_len;
 
         if (check_res.first_fill_len + req.orig->generation_length > (size_t)worker_config_.max_tokens_per_request) {
             check_res.rest_iters = worker_config_.max_tokens_per_request - check_res.first_fill_len;
