@@ -47,10 +47,19 @@ static RetCode InitNccl(uint32_t tensor_parallel_size, std::vector<ncclComm_t>* 
     return RC_SUCCESS;
 }
 
-static Engine* CreateCudaEngine(ncclComm_t nccl_comm, int device_id) {
+static Engine* CreateCudaEngine(ncclComm_t nccl_comm, int device_id, const std::string& quant_method) {
     ppl::nn::llm::cuda::EngineOptions options;
     options.device_id = device_id;
     options.mm_policy = ppl::nn::llm::cuda::MM_COMPACT;
+
+    if (quant_method == "none") {
+        options.quant_method = ppl::nn::llm::cuda::QUANT_METHOD_NONE;
+    } else if (quant_method == "online_i8i8") {
+        options.quant_method = ppl::nn::llm::cuda::QUANT_METHOD_ONLINE_I8I8;
+    } else {
+        LOG(ERROR) << "unknown/unsupported --quant-method option: " << quant_method;
+        return nullptr;
+    }
 
     auto engine = unique_ptr<Engine>(ppl::nn::llm::cuda::EngineFactory::Create(options));
     if (!engine) {
@@ -100,18 +109,25 @@ static Runtime* CreatePPLRuntime(Engine* cuda_engine, const string& model_file) 
 
 class InitTask final {
 public:
-    InitTask(uint32_t id, const string& model_dir, uint64_t kv_cache_block_bytes, uint64_t kv_scale_block_bytes,
-             float kv_cache_max_tokens_scale, Barrier* alloc_max_mem_barrier, CudaResourceManager* mgr)
+    InitTask(uint32_t id,
+             const string& model_dir,
+             uint64_t kv_cache_block_bytes,
+             uint64_t kv_scale_block_bytes,
+             float kv_cache_max_tokens_scale,
+             const string& quant_method,
+             Barrier* alloc_max_mem_barrier,
+             CudaResourceManager* mgr)
         : id_(id)
         , model_dir_(model_dir)
         , kv_cache_block_bytes_(kv_cache_block_bytes)
         , kv_scale_block_bytes_(kv_scale_block_bytes)
         , kv_cache_max_tokens_scale_(kv_cache_max_tokens_scale)
+        , quant_method_(quant_method)
         , alloc_max_mem_barrier_(alloc_max_mem_barrier)
         , mgr_(mgr) {}
 
     RetCode Process() {
-        auto engine = unique_ptr<Engine>(CreateCudaEngine(mgr_->nccl_comm_list[id_], id_));
+        auto engine = unique_ptr<Engine>(CreateCudaEngine(mgr_->nccl_comm_list[id_], id_, quant_method_));
         if (!engine) {
             LOG(ERROR) << "create cuda engine [" << id_ << "] failed.";
             return RC_OTHER_ERROR;
@@ -177,6 +193,7 @@ private:
     const uint64_t kv_cache_block_bytes_;
     const uint64_t kv_scale_block_bytes_;
     const float kv_cache_max_tokens_scale_;
+    const string& quant_method_;
     Barrier* alloc_max_mem_barrier_;
     CudaResourceManager* mgr_;
 };
@@ -240,7 +257,9 @@ RetCode CudaResourceManager::Init(const ModelConfig& model_config, const ServerC
     alloc_max_mem_barrier.Reset(tensor_parallel_size);
     rc = ppl::llm::utils::ParallelExecute<InitTask>(&this->device_worker_pool, server_config.model_dir,
                                                     kv_cache_block_bytes, kv_scale_block_bytes,
-                                                    server_config.max_tokens_scale, &alloc_max_mem_barrier, this);
+                                                    server_config.max_tokens_scale,
+                                                    server_config.quant_method,
+                                                    &alloc_max_mem_barrier, this);
 
     if (rc != RC_SUCCESS) {
         LOG(ERROR) << "ParallelExecute(InitTask) failed.";
