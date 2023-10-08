@@ -33,6 +33,8 @@ struct ServerConfig final {
     float top_p;
     int top_k;
 
+    std::string quant_method;
+
     float max_tokens_scale;
     int max_tokens_per_request;
     int max_running_batch;
@@ -70,6 +72,7 @@ struct WorkerConfig final {
     int max_tokens_per_request;
     int max_tokens_per_step;
 };
+
 }} // namespace ppl::llm
 
 #endif

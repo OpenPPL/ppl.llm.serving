@@ -90,6 +90,13 @@ bool ParseServerConfig(const std::string& config_file, ServerConfig* server_conf
     }
     server_config->top_k = std::max(it->value.GetInt(), 1);
 
+    it = json_reader.FindMember("quant_method");
+    if (it == json_reader.MemberEnd()) {
+        LOG(ERROR) << "find key [quant_method] failed";
+        return false;
+    }
+    server_config->quant_method = it->value.GetString();
+
     it = json_reader.FindMember("max_tokens_scale");
     if (it == json_reader.MemberEnd()) {
         LOG(ERROR) << "find key [max_tokens_scale] failed";
