@@ -29,7 +29,8 @@
 
 #include "ppl/common/log.h"
 
-#include <unistd.h>
+#include <chrono>
+#include <thread>
 #include <unordered_map>
 #include <pthread.h>
 
@@ -199,7 +200,7 @@ int main(int argc, char const* argv[]) {
         llm.Generate(request_list, &tid_rsp_map);
     }
 
-    sleep(1);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
     std::cout << "===================================" << std::endl;
     for (size_t i = 0; i < tid_rsp_map.size(); i++) {
         const std::string& prompt = request_list[i]->prompt;
