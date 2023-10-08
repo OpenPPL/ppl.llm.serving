@@ -149,6 +149,8 @@ bool ParseServerConfig(const std::string& config_file, ServerConfig* server_conf
     LOG(INFO) << "server_config.top_k: " << server_config->top_k;
     LOG(INFO) << "server_config.top_p: " << server_config->top_p;
 
+    LOG(INFO) << "server_config.quant_method: " << server_config->quant_method;
+
     LOG(INFO) << "server_config.tensor_parallel_size: " << server_config->tensor_parallel_size;
     LOG(INFO) << "server_config.max_tokens_scale: " << server_config->max_tokens_scale;
     LOG(INFO) << "server_config.max_tokens_per_request: " << server_config->max_tokens_per_request;
