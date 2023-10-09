@@ -940,12 +940,12 @@ void LLaMAWorker::Process(const shared_ptr<Request>& req, Connection* conn) {
 void* LLaMAWorker::WorkerThreadFunc(void* arg) {
     auto worker = (LLaMAWorker*)arg;
     while (true) {
+        pthread_mutex_lock(worker->sched_.GetQueueLock());
         while (worker->sched_.GetPendingSize() == 0) {
             LOG(INFO) << "waiting for request ...";
-            pthread_mutex_lock(&worker->uuid_data_lock_);
-            pthread_cond_wait(&worker->req_signal_, &worker->uuid_data_lock_);
-            pthread_mutex_unlock(&worker->uuid_data_lock_);
+            pthread_cond_wait(&worker->req_signal_, worker->sched_.GetQueueLock());
         }
+        pthread_mutex_unlock(worker->sched_.GetQueueLock());
         worker->Work();
     }
     return nullptr;

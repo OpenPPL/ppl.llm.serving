@@ -85,6 +85,10 @@ public:
         return queues_[0].size() + queues_[1].size();
     }
 
+    pthread_mutex_t* GetQueueLock() {
+        return &switch_queue_lock_;
+    }
+
 private:
     int consumer_queue_index_;
     pthread_mutex_t switch_queue_lock_;
