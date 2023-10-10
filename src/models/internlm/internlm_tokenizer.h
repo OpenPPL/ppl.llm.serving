@@ -20,10 +20,9 @@
 
 #include "utils/tokenizer.h"
 
+#include "absl/strings/string_view.h"
 #include "ppl/nn/common/logger.h"
 #include "sentencepiece_processor.h"
-
-#include <string_view>
 
 namespace ppl { namespace llm { namespace internlm {
 
@@ -41,8 +40,8 @@ public:
     }
 
     void Encode(const char* prompt, uint32_t len, std::vector<int>* token_ids) const override {
-        token_ids->push_back(sp_processor_.bos_id()); // preprocess
-        sp_processor_.Encode(std::string_view(prompt, len), token_ids);
+        token_ids->push_back(sp_processor_.bos_id());
+        sp_processor_.Encode(absl::string_view(prompt, len), token_ids);
     }
 
     void Decode(int* token_ids, uint32_t len, std::string* output) const override {

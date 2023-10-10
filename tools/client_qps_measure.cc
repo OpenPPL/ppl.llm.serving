@@ -40,6 +40,7 @@ struct TidRecord {
     int prompt_len;
     int output_len;
     bool is_prefill = true;
+    std::chrono::_V2::system_clock::time_point send_time;
     std::chrono::_V2::system_clock::time_point prefill_time;
     std::chrono::_V2::system_clock::time_point finished_time;
 };
@@ -93,6 +94,14 @@ public:
 
         for (size_t i = 0; i < req_list.size(); i++) {
             const auto& req_batch = *req_list[i];
+
+            auto it = tid_record_map.find(req_batch.req(0).id());
+            if (it == tid_record_map.end()) {
+                LOG(ERROR) << "unrecoginized tid: " << req_batch.req(0).id();
+                return;
+            }
+            it->second.send_time = std::chrono::high_resolution_clock::now();
+
             AsyncClientCall* call = new AsyncClientCall;
 
             call->response_reader = stub_->PrepareAsyncGeneration(&call->context, req_batch, &cq_);
@@ -245,7 +254,7 @@ int main(int argc, char* argv[]) {
     for (auto it = tid_record_map.begin(); it != tid_record_map.end(); ++it) {
         auto& tid_record = it->second;
         double prefill_latency = double(
-            std::chrono::duration_cast<std::chrono::microseconds>(tid_record.prefill_time - benchmark_start).count() /
+            std::chrono::duration_cast<std::chrono::microseconds>(tid_record.prefill_time - tid_record.send_time).count() /
             1000.0); // ms
 
         double decoding_tatency = double(
@@ -253,7 +262,7 @@ int main(int argc, char* argv[]) {
                 .count() /
             1000.0); // ms
         double prompt_latency = double(
-            std::chrono::duration_cast<std::chrono::microseconds>(tid_record.finished_time - benchmark_start).count() /
+            std::chrono::duration_cast<std::chrono::microseconds>(tid_record.finished_time - tid_record.send_time).count() /
             1000.0); // ms
         // total_latency_per_token += (prompt_latency / tid_record.output_len);
         total_prompt_latency += prompt_latency;
