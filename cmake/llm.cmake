@@ -1,7 +1,7 @@
 # sentencepiece after serving, libprotobuf and absl wanted
 include(cmake/sentencepiece.cmake)
 
-file(GLOB __PPL_LLM_SRC__ src/models/llama/llama_worker.cc)
+file(GLOB __PPL_LLM_SRC__ src/models/factory.cc src/models/llama/llama_worker.cc src/models/internlm/internlm_worker.cc)
 
 if(PPLNN_USE_LLM_CUDA)
     file(GLOB __TMP_SRC__ src/backends/cuda/*.cc)

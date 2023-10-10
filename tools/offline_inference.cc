@@ -20,8 +20,7 @@
 #include "common/processor.h"
 #include "common/connection.h"
 #include "backends/cuda/resource_manager.h"
-#include "models/llama/llama_tokenizer.h"
-#include "models/llama/llama_worker.h"
+#include "models/factory.h"
 #include "models/resource.h"
 #include "utils/utils.h"
 #include "utils/tokenizer.h"
@@ -29,10 +28,12 @@
 
 #include "ppl/common/log.h"
 
+#include <iostream>
 #include <chrono>
 #include <thread>
 #include <unordered_map>
 #include <pthread.h>
+#include <sstream>
 
 using namespace std;
 using namespace ppl::llm;
@@ -98,7 +99,7 @@ private:
 
 class LLM {
 public:
-    LLM(const std::shared_ptr<RequestProcessor>& llm_worker) : llm_worker_(llm_worker) {}
+    LLM(RequestProcessor* llm_worker) : llm_worker_(llm_worker) {}
 
     void Generate(const std::vector<std::shared_ptr<Request>>& req_list,
                   std::unordered_map<uint64_t, std::string>* tid_rsp_map) {
@@ -113,7 +114,7 @@ public:
     }
 
 private:
-    std::shared_ptr<RequestProcessor> llm_worker_;
+    RequestProcessor* llm_worker_;
     LocalConnection conn_;
 };
 
@@ -150,14 +151,11 @@ int main(int argc, char const* argv[]) {
         LOG(ERROR) << "init CudaResourceManager failed: " << GetRetCodeStr(rc);
         return -1;
     }
-    std::shared_ptr<ppl::llm::utils::Tokenizer> tokenizer;
 
-    if (server_config.model_type == "llama") {
-        auto llama_tokenizer = std::make_shared<llama::LlamaTokenizer>();
-        llama_tokenizer->Init(server_config.tokenizer_path);
-        tokenizer = llama_tokenizer;
-    } else {
-        LOG(ERROR) << "not supported model: " << server_config.model_type;
+    auto tokenizer = unique_ptr<ppl::llm::utils::Tokenizer>(
+        TokenizerFactory::Create(server_config.model_type, server_config.tokenizer_path));
+    if (!tokenizer) {
+        LOG(ERROR) << "create tokenizer failed";
         return -1;
     }
 
@@ -174,22 +172,14 @@ int main(int argc, char const* argv[]) {
         request_list.push_back(std::make_shared<Request>(i, prompts[i], 1.0, 64));
     }
 
-    std::shared_ptr<RequestProcessor> llm_worker;
-    if (server_config.model_type == "llama") {
-        auto llama_worker = std::make_shared<llama::LLaMAWorker>(resource, model_config, worker_config);
-        auto rc = llama_worker->Init();
-        if (rc != RC_SUCCESS) {
-            LOG(ERROR) << "llama_worker init failed: " << GetRetCodeStr(rc);
-            return -1;
-        }
-        LOG(INFO) << "Init llama worker successed";
-        llm_worker = llama_worker;
-    } else {
-        LOG(ERROR) << "not supported model: " << server_config.model_type;
+    auto llm_worker = unique_ptr<RequestProcessor>(
+        ModelFactory::Create(server_config.model_type, resource, model_config, worker_config));
+    if (!llm_worker) {
+        LOG(ERROR) << "Create llm worker failed";
         return -1;
     }
 
-    LLM llm(llm_worker);
+    LLM llm(llm_worker.get());
     unordered_map<uint64_t, string> tid_rsp_map;
 
     LOG(INFO) << "before generate";
@@ -201,13 +191,15 @@ int main(int argc, char const* argv[]) {
     }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    std::cout << "===================================" << std::endl;
     for (size_t i = 0; i < tid_rsp_map.size(); i++) {
         const std::string& prompt = request_list[i]->prompt;
         const std::string& answer = tid_rsp_map[request_list[i]->id];
-        std::cout << "Prompt: " << prompt << std::endl;
-        std::cout << "Answer: " << answer << std::endl;
-        std::cout << "===================================" << std::endl;
+
+        std::stringstream ss;
+        ss << "Prompt: " << prompt << std::endl;
+        ss << "Answer:" << answer;
+
+        LOG(INFO) << "\n" << ss.str();
     }
 
     std::cout << "generation time: " << generate_time << std::endl;

@@ -17,8 +17,7 @@
 
 #include "models/config.h"
 #include "models/resource.h"
-#include "models/llama/llama_tokenizer.h"
-#include "models/llama/llama_worker.h"
+#include "models/factory.h"
 #include "serving/grpc_server.h"
 #include "backends/cuda/sampler.h"
 #include "backends/cuda/resource_manager.h"
@@ -67,14 +66,11 @@ int main(int argc, char* argv[]) {
         LOG(ERROR) << "init CudaResourceManager failed: " << GetRetCodeStr(rc);
         return -1;
     }
-    std::shared_ptr<ppl::llm::utils::Tokenizer> tokenizer;
 
-    if (server_config.model_type == "llama") {
-        auto llama_tokenizer = std::make_shared<llama::LlamaTokenizer>();
-        llama_tokenizer->Init(server_config.tokenizer_path);
-        tokenizer = llama_tokenizer;
-    } else {
-        LOG(ERROR) << "not supported model: " << server_config.model_type;
+    auto tokenizer = unique_ptr<ppl::llm::utils::Tokenizer>(
+        TokenizerFactory::Create(server_config.model_type, server_config.tokenizer_path));
+    if (!tokenizer) {
+        LOG(ERROR) << "create tokenizer failed";
         return -1;
     }
 
@@ -94,23 +90,16 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
-    std::shared_ptr<RequestProcessor> llm_worker;
-    if (server_config.model_type == "llama") {
-        auto llama_worker = std::make_shared<llama::LLaMAWorker>(resource, model_config, worker_config);
-        rc = llama_worker->Init();
-        if (rc != RC_SUCCESS) {
-            LOG(ERROR) << "llama_worker init failed: " << GetRetCodeStr(rc);
-            return -1;
-        }
-        LOG(INFO) << "Init llama worker successed";
-        svr.SetOnDisconnectedFunc([&llama_worker](Connection* c) {
-            llama_worker->ClearTask(c);
-        });
-        llm_worker = llama_worker;
-    } else {
-        LOG(ERROR) << "not supported model: " << server_config.model_type;
+    auto llm_worker = unique_ptr<RequestProcessor>(
+        ModelFactory::Create(server_config.model_type, resource, model_config, worker_config));
+    if (!llm_worker) {
+        LOG(ERROR) << "Create llm worker failed";
         return -1;
     }
+
+    svr.SetOnDisconnectedFunc([&llm_worker](Connection* c) {
+        llm_worker->ClearTask(c);
+    });
 
     LOG(INFO) << "listening on [" << listen_addr << "]";
 
