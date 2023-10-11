@@ -28,6 +28,7 @@ using namespace std;
 
 namespace ppl { namespace llm { namespace cuda {
 
+#ifdef PPLNN_CUDA_ENABLE_NCCL
 #define NCCL_CHECK(cmd, emsg)                                                \
     do {                                                                     \
         ncclResult_t e = (cmd);                                              \
@@ -46,8 +47,9 @@ static RetCode InitNccl(uint32_t tensor_parallel_size, std::vector<ncclComm_t>* 
     NCCL_CHECK(ncclCommInitAll(nccl_comm_list->data(), tensor_parallel_size, dev_list.data()), "ncclCommInitAll");
     return RC_SUCCESS;
 }
+#endif
 
-static Engine* CreateCudaEngine(ncclComm_t nccl_comm, int device_id, const std::string& quant_method) {
+static Engine* CreateCudaEngine(int device_id, const std::string& quant_method) {
     ppl::nn::llm::cuda::EngineOptions options;
     options.device_id = device_id;
     options.mm_policy = ppl::nn::llm::cuda::MM_COMPACT;
@@ -61,18 +63,12 @@ static Engine* CreateCudaEngine(ncclComm_t nccl_comm, int device_id, const std::
         return nullptr;
     }
 
-    auto engine = unique_ptr<Engine>(ppl::nn::llm::cuda::EngineFactory::Create(options));
+    auto* engine = ppl::nn::llm::cuda::EngineFactory::Create(options);
     if (!engine) {
         LOG(ERROR) << "create cuda engine failed.";
         return nullptr;
     }
-
-    auto rc = engine->Configure(ppl::nn::llm::cuda::ENGINE_CONF_SET_TP_NCCL_COMM, nccl_comm);
-    if (rc != RC_SUCCESS) {
-        return nullptr;
-    }
-
-    return engine.release();
+    return engine;
 }
 
 static Runtime* CreatePPLRuntime(Engine* cuda_engine, const string& model_file) {
@@ -109,13 +105,8 @@ static Runtime* CreatePPLRuntime(Engine* cuda_engine, const string& model_file) 
 
 class InitTask final {
 public:
-    InitTask(uint32_t id,
-             const string& model_dir,
-             uint64_t kv_cache_block_bytes,
-             uint64_t kv_scale_block_bytes,
-             float kv_cache_max_tokens_scale,
-             const string& quant_method,
-             Barrier* alloc_max_mem_barrier,
+    InitTask(uint32_t id, const string& model_dir, uint64_t kv_cache_block_bytes, uint64_t kv_scale_block_bytes,
+             float kv_cache_max_tokens_scale, const string& quant_method, Barrier* alloc_max_mem_barrier,
              CudaResourceManager* mgr)
         : id_(id)
         , model_dir_(model_dir)
@@ -127,26 +118,34 @@ public:
         , mgr_(mgr) {}
 
     RetCode Process() {
-        auto engine = unique_ptr<Engine>(CreateCudaEngine(mgr_->nccl_comm_list[id_], id_, quant_method_));
+        auto* engine = CreateCudaEngine(id_, quant_method_);
         if (!engine) {
             LOG(ERROR) << "create cuda engine [" << id_ << "] failed.";
             return RC_OTHER_ERROR;
         }
+
+#ifdef PPLNN_CUDA_ENABLE_NCCL
+        auto rc = engine->Configure(ppl::nn::llm::cuda::ENGINE_CONF_SET_TP_NCCL_COMM, mgr_->nccl_comm_list[id_]);
+        if (rc != RC_SUCCESS) {
+            LOG(ERROR) << "engine configure nccl error";
+            return RC_OTHER_ERROR;
+        }
+#endif
         LOG(INFO) << "create engine [" << id_ << "] success.";
 
-        unique_ptr<Runtime> runtime;
+        Runtime* runtime;
         // TODO load models one by one to reduce memory usage
         {
             const string model_path = model_dir_ + "/model_slice_" + std::to_string(id_) + "/model.onnx";
             LOG(INFO) << "model_slice_" << std::to_string(id_) << ": " << model_path;
-            runtime = unique_ptr<Runtime>(CreatePPLRuntime(engine.get(), model_path));
+            runtime = CreatePPLRuntime(engine, model_path);
             if (!runtime) {
                 LOG(ERROR) << "create runtime [" << id_ << "] failed.";
                 return RC_OTHER_ERROR;
             }
         }
 
-        mgr_->engine_list[id_] = std::move(engine);
+        mgr_->engine_list[id_] = std::unique_ptr<Engine>(engine);
 
         if (id_ == 0) {
             size_t avail_bytes = 0, total = 0;
@@ -180,7 +179,7 @@ public:
                        << "] failed: " << cudaGetErrorString(cu_ret);
             return RC_OTHER_ERROR;
         }
-        item.runtime = runtime.release();
+        item.runtime = runtime;
 
         mgr_->items[id_] = item;
 
@@ -237,12 +236,20 @@ RetCode CudaResourceManager::Init(const ModelConfig& model_config, const ServerC
         model_config.cache_quant_group * sizeof(float16_t);
     const int tensor_parallel_size = server_config.tensor_parallel_size;
 
-    auto rc = InitNccl(tensor_parallel_size, &nccl_comm_list);
+    RetCode rc;
+#ifdef PPLNN_CUDA_ENABLE_NCCL
+    rc = InitNccl(tensor_parallel_size, &nccl_comm_list);
     if (rc != RC_SUCCESS) {
         LOG(ERROR) << "NCCL init failed.";
         return rc;
     }
     LOG(INFO) << "Init Nccl successed";
+#else
+    if (server_config.tensor_parallel_size > 1) {
+        LOG(ERROR) << "tensor_parallel_size > 1 need nccl support. Please compile with marco -DPPLNN_CUDA_ENABLE_NCCL=ON";
+        return RC_OTHER_ERROR;
+    }
+#endif
 
     this->engine_list.resize(tensor_parallel_size);
     this->items.resize(tensor_parallel_size);
