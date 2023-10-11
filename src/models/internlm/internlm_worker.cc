@@ -15,23 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#ifndef __PPL_LLM_PROCESSOR_H__
-#define __PPL_LLM_PROCESSOR_H__
+#include "internlm_worker.h"
 
-#include "common/request.h"
-#include "common/connection.h"
+#include "ppl/common/log.h"
 
-#include <memory>
+namespace ppl { namespace llm { namespace internlm {
 
-namespace ppl { namespace llm {
+ppl::common::RetCode InternLMWorker::Init() {
+    auto ret = worker_.Init();
+    if (ret != ppl::common::RC_SUCCESS) {
+        LOG(ERROR) << "worker init failed.";
+        return ret;
+    }
+    return ppl::common::RC_SUCCESS;
+}
 
-class RequestProcessor {
-public:
-    virtual ~RequestProcessor() {}
-    virtual void Process(const std::shared_ptr<Request>&, Connection*) = 0;
-    virtual void ClearTask(Connection* conn) = 0;
-};
-
-}} // namespace ppl::llm
-
-#endif
+}}} // namespace ppl::llm::internlm

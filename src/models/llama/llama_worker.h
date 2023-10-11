@@ -137,7 +137,7 @@ public:
     ~LLaMAWorker();
 
     ppl::common::RetCode Init();
-    void ClearTask(Connection*);
+    void ClearTask(Connection*) override;
 
     void Process(const std::shared_ptr<Request>&, Connection*) override;
 

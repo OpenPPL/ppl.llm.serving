@@ -46,9 +46,6 @@ public:
 
     void Decode(int* token_ids, uint32_t len, std::string* output) const override {
         sp_processor_.Decode(token_ids, len, output);
-        if (IsNewWord(token_ids[0])) {
-            output->insert(0, " ");
-        }
     }
 
     bool IsEosId(int token_id) const override {

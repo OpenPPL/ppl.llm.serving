@@ -15,21 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#ifndef __PPL_LLM_PROCESSOR_H__
-#define __PPL_LLM_PROCESSOR_H__
+#ifndef __PPL_LLM_FACTORY_H__
+#define __PPL_LLM_FACTORY_H__
 
-#include "common/request.h"
-#include "common/connection.h"
+#include "common/processor.h"
+#include "models/resource.h"
+#include "models/config.h"
+#include "utils/tokenizer.h"
 
-#include <memory>
+#include <string>
 
 namespace ppl { namespace llm {
 
-class RequestProcessor {
+class ModelFactory final {
 public:
-    virtual ~RequestProcessor() {}
-    virtual void Process(const std::shared_ptr<Request>&, Connection*) = 0;
-    virtual void ClearTask(Connection* conn) = 0;
+    static RequestProcessor* Create(const std::string& model_type, const Resource& resource, const ModelConfig& mconfig,
+                                    const WorkerConfig& wconfig);
+};
+
+class TokenizerFactory final {
+public:
+    static utils::Tokenizer* Create(const std::string& model_type, const std::string& tokenizer_path);
 };
 
 }} // namespace ppl::llm
