@@ -28,10 +28,14 @@
 #include "ppl/common/retcode.h"
 #include "ppl/nn/engines/llm_cuda/engine_factory.h"
 #include "ppl/nn/runtime/runtime.h"
+
+#ifdef PPLNN_CUDA_ENABLE_NCCL
 #include "nccl.h"
+#endif
 
 #include <memory>
 #include <vector>
+#include <cuda_runtime.h>
 
 namespace ppl { namespace llm { namespace cuda {
 
@@ -47,23 +51,29 @@ struct CudaResourceManager final {
 
         engine_list.clear();
 
+#ifdef PPLNN_CUDA_ENABLE_NCCL
         for (auto it = nccl_comm_list.begin(); it != nccl_comm_list.end(); ++it) {
             auto e = ncclCommDestroy(*it);
             if (e != ncclSuccess) {
                 LOG(ERROR) << "NCCL error(code:" << (int)e << ") on " << "(ncclCommDestroy)";
             }
         }
+#endif
+
     }
 
     std::unique_ptr<ppl::llm::utils::Sampler> CreateCudaSampler(ppl::nn::Runtime* runtime);
     ppl::common::RetCode Init(const ModelConfig& model_config, const ServerConfig& server_config);
-
-    std::vector<ncclComm_t> nccl_comm_list;
     ppl::common::StaticThreadPool device_worker_pool;
     std::vector<std::unique_ptr<ppl::nn::Engine>> engine_list;
     std::vector<ppl::llm::ResourceItem> items;
     std::unique_ptr<ppl::llm::utils::Sampler> sampler;
     uint64_t kv_cache_max_tokens;
+
+#ifdef PPLNN_CUDA_ENABLE_NCCL
+    std::vector<ncclComm_t> nccl_comm_list;
+#endif
+
 };
 
 }}} // namespace ppl::llm::cuda
