@@ -63,12 +63,7 @@ static Engine* CreateCudaEngine(int device_id, const std::string& quant_method) 
         return nullptr;
     }
 
-    auto* engine = ppl::nn::llm::cuda::EngineFactory::Create(options);
-    if (!engine) {
-        LOG(ERROR) << "create cuda engine failed.";
-        return nullptr;
-    }
-    return engine;
+    return ppl::nn::llm::cuda::EngineFactory::Create(options);
 }
 
 static Runtime* CreatePPLRuntime(Engine* cuda_engine, const string& model_file) {
@@ -118,7 +113,7 @@ public:
         , mgr_(mgr) {}
 
     RetCode Process() {
-        auto* engine = CreateCudaEngine(id_, quant_method_);
+        auto engine = unique_ptr<Engine>(CreateCudaEngine(id_, quant_method_));
         if (!engine) {
             LOG(ERROR) << "create cuda engine [" << id_ << "] failed.";
             return RC_OTHER_ERROR;
@@ -133,19 +128,19 @@ public:
 #endif
         LOG(INFO) << "create engine [" << id_ << "] success.";
 
-        Runtime* runtime;
+        unique_ptr<Runtime> runtime;
         // TODO load models one by one to reduce memory usage
         {
             const string model_path = model_dir_ + "/model_slice_" + std::to_string(id_) + "/model.onnx";
             LOG(INFO) << "model_slice_" << std::to_string(id_) << ": " << model_path;
-            runtime = CreatePPLRuntime(engine, model_path);
+            runtime = unique_ptr<Runtime>(CreatePPLRuntime(engine.get(), model_path));
             if (!runtime) {
                 LOG(ERROR) << "create runtime [" << id_ << "] failed.";
                 return RC_OTHER_ERROR;
             }
         }
 
-        mgr_->engine_list[id_] = std::unique_ptr<Engine>(engine);
+        mgr_->engine_list[id_] = std::move(engine);
 
         if (id_ == 0) {
             size_t avail_bytes = 0, total = 0;
@@ -179,7 +174,7 @@ public:
                        << "] failed: " << cudaGetErrorString(cu_ret);
             return RC_OTHER_ERROR;
         }
-        item.runtime = runtime;
+        item.runtime = runtime.release();
 
         mgr_->items[id_] = item;
 
