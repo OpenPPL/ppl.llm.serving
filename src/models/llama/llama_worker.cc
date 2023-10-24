@@ -38,6 +38,7 @@ using namespace ppl::common;
 using namespace ppl::nn;
 
 #ifdef PPL_LLM_ENABLE_PROFILING
+#ifdef PPLNN_USE_LLM_CUDA
 #include <cuda_runtime.h>
 static void PrintMemUsage() {
     size_t free_bytes, total_bytes;
@@ -47,6 +48,11 @@ static void PrintMemUsage() {
     float used = total - free;
     fprintf(stderr, "memory usage: (%.2f - %.2f) -> %.2f GiB\n", total, free, used);
 }
+#else
+static void PrintMemUsage() {
+    fprintf(stderr, "memory usage: unknown\n");
+}
+#endif
 #endif
 
 namespace ppl { namespace llm { namespace llama {
