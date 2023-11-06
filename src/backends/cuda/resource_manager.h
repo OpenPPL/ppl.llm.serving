@@ -45,7 +45,9 @@ struct CudaResourceManager final {
         
         for (auto it = items.begin(); it != items.end(); ++it) {
             cudaFree(it->kv_cache_mem);
-            cudaFree(it->kv_scale_mem);
+            if (it->kv_scale_mem) {
+                cudaFree(it->kv_scale_mem);
+            }
             delete it->runtime;
         }
 

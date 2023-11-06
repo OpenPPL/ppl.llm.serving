@@ -22,11 +22,17 @@
 #include "ppl/nn/models/onnx/runtime_builder.h"
 #include "ppl/nn/models/onnx/runtime_builder_factory.h"
 
+#include <map>
+
 using namespace ppl::common;
 using namespace ppl::nn;
 using namespace std;
 
 namespace ppl { namespace llm { namespace cuda {
+
+static const map<int, int32_t> g_cache_int2size = {
+    {0, sizeof(float16_t)}, {8, sizeof(int8_t)}
+};
 
 #ifdef PPLNN_CUDA_ENABLE_NCCL
 #define NCCL_CHECK(cmd, emsg)                                                \
@@ -167,13 +173,16 @@ public:
                        << "] failed: " << cudaGetErrorString(cu_ret);
             return RC_OTHER_ERROR;
         }
-        cu_ret = cudaMalloc(&item.kv_scale_mem, mgr_->kv_cache_max_tokens * kv_scale_block_bytes_);
-        if (cu_ret != cudaSuccess) {
-            cudaFree(item.kv_cache_mem);
-            LOG(ERROR) << "alloc kv scale [" << mgr_->kv_cache_max_tokens * kv_scale_block_bytes_
-                       << "] failed: " << cudaGetErrorString(cu_ret);
-            return RC_OTHER_ERROR;
+        if (kv_scale_block_bytes_ > 0) {
+            cu_ret = cudaMalloc(&item.kv_scale_mem, mgr_->kv_cache_max_tokens * kv_scale_block_bytes_);
+            if (cu_ret != cudaSuccess) {
+                cudaFree(item.kv_cache_mem);
+                LOG(ERROR) << "alloc kv scale [" << mgr_->kv_cache_max_tokens * kv_scale_block_bytes_
+                           << "] failed: " << cudaGetErrorString(cu_ret);
+                return RC_OTHER_ERROR;
+            }
         }
+
         item.runtime = runtime.release();
 
         mgr_->items[id_] = item;
@@ -224,11 +233,21 @@ std::unique_ptr<ppl::llm::utils::Sampler> CudaResourceManager::CreateCudaSampler
 }
 
 RetCode CudaResourceManager::Init(const ModelConfig& model_config, const ServerConfig& server_config) {
+    auto size_iter = g_cache_int2size.find(model_config.cache_quant_bit);
+    if (size_iter == g_cache_int2size.end()) {
+        LOG(ERROR) << "no supported cache quant bit: [" << model_config.cache_quant_bit << "]";
+        return RC_OTHER_ERROR;
+    }
+    int32_t size_cache_datatype = size_iter->second;
+
     const uint64_t kv_cache_block_bytes = model_config.num_layers * 2 * model_config.num_kv_heads /
-        server_config.tensor_parallel_size * model_config.hidden_dim / model_config.num_heads * sizeof(int8_t);
-    const uint64_t kv_scale_block_bytes = model_config.num_layers * 2 * model_config.num_kv_heads /
-        server_config.tensor_parallel_size * model_config.hidden_dim / model_config.num_heads /
-        model_config.cache_quant_group * sizeof(float16_t);
+        server_config.tensor_parallel_size * model_config.hidden_dim / model_config.num_heads * size_cache_datatype;
+    uint64_t kv_scale_block_bytes = 0;
+    if (model_config.cache_quant_bit > 0) {
+        kv_scale_block_bytes = model_config.num_layers * 2 * model_config.num_kv_heads /
+            server_config.tensor_parallel_size * model_config.hidden_dim / model_config.num_heads /
+            model_config.cache_quant_group * sizeof(float16_t);
+    }
     const int tensor_parallel_size = server_config.tensor_parallel_size;
 
     RetCode rc;

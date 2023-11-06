@@ -349,13 +349,16 @@ RetCode LLaMAWorker::CheckParameters() const {
         return RC_INVALID_VALUE;
     }
 
-    if (model_config_.cache_layout != 0 && model_config_.cache_layout != 3) {
-        LOG(ERROR) << "only support cache_layout == 0 || cache_layout == 3";
+    if (model_config_.cache_layout != 0 && model_config_.cache_layout != 1 && model_config_.cache_layout != 2 &&
+        model_config_.cache_layout != 3) {
+        LOG(ERROR) << "only support cache_layout == 0 || cache_layout == 1 || cache_layout == 2 || cache_layout == 3";
         return RC_INVALID_VALUE;
     }
 
-    if (model_config_.cache_quant_bit != 8 && model_config_.cache_quant_group != 8) {
-        LOG(ERROR) << "only support cache_quant_bit == 8 and cache_quant_group == 8";
+    if ((model_config_.cache_quant_bit != 8 || model_config_.cache_quant_group != 8) &&
+        (model_config_.cache_quant_bit != 0 || model_config_.cache_quant_group != 1)) {
+        LOG(ERROR) << "only support (cache_quant_bit == 8 and cache_quant_group == 8) or (cache_quant_bit == 1 and "
+                      "cache_quant_group == 0)";
         return RC_INVALID_VALUE;
     }
 
@@ -395,7 +398,9 @@ LLaMAWorker::LLaMAWorker(const Resource& resource, const ModelConfig& mconfig, c
         arg->max_seq_len = arg->resource->runtime->GetInputTensor(7);
         arg->max_kv_len = arg->resource->runtime->GetInputTensor(8);
         arg->kv_cache = arg->resource->runtime->GetInputTensor(9);
-        arg->kv_scale = arg->resource->runtime->GetInputTensor(10);
+        if (model_config_.cache_quant_bit > 0) {
+            arg->kv_scale = arg->resource->runtime->GetInputTensor(10);
+        }
 
         arg->logits = arg->resource->runtime->GetOutputTensor(0);
 
@@ -404,7 +409,9 @@ LLaMAWorker::LLaMAWorker(const Resource& resource, const ModelConfig& mconfig, c
         arg->max_kv_len->SetDeviceContext(arg->resource->runtime->GetHostDeviceContext());
 
         arg->kv_cache->SetBufferPtr(arg->resource->kv_cache_mem);
-        arg->kv_scale->SetBufferPtr(arg->resource->kv_scale_mem);
+        if (model_config_.cache_quant_bit > 0) {
+            arg->kv_scale->SetBufferPtr(arg->resource->kv_scale_mem);
+        }
     }
 }
 
@@ -431,18 +438,43 @@ RetCode LLaMAWorker::Init() {
             arg->kv_cache->GetShape()->Reshape({(int64_t)kv_cache_max_tokens_, model_config_.num_layers, 2,
                                                 model_config_.num_kv_heads / tensor_parallel_size_,
                                                 model_config_.hidden_dim / model_config_.num_heads});
-            arg->kv_scale->GetShape()->Reshape(
-                {(int64_t)kv_cache_max_tokens_, model_config_.num_layers, 2,
-                 model_config_.num_kv_heads / tensor_parallel_size_,
-                 model_config_.hidden_dim / model_config_.num_heads / model_config_.cache_quant_group});
+            if (model_config_.cache_quant_bit > 0) {
+                arg->kv_scale->GetShape()->Reshape(
+                    {(int64_t)kv_cache_max_tokens_, model_config_.num_layers, 2,
+                     model_config_.num_kv_heads / tensor_parallel_size_,
+                     model_config_.hidden_dim / model_config_.num_heads / model_config_.cache_quant_group});
+            }
+
+        } else if (model_config_.cache_layout == 1) {
+            arg->kv_cache->GetShape()->Reshape({model_config_.num_layers, (int64_t)kv_cache_max_tokens_, 2,
+                                                model_config_.num_kv_heads / tensor_parallel_size_,
+                                                model_config_.hidden_dim / model_config_.num_heads});
+            if (model_config_.cache_quant_bit > 0) {
+                arg->kv_scale->GetShape()->Reshape(
+                    {model_config_.num_layers, (int64_t)kv_cache_max_tokens_, 2,
+                     model_config_.num_kv_heads / tensor_parallel_size_,
+                     model_config_.hidden_dim / model_config_.num_heads / model_config_.cache_quant_group});
+            }
+        } else if (model_config_.cache_layout == 2) {
+            arg->kv_cache->GetShape()->Reshape({model_config_.num_layers, 2, (int64_t)kv_cache_max_tokens_,
+                                                model_config_.num_kv_heads / tensor_parallel_size_,
+                                                model_config_.hidden_dim / model_config_.num_heads});
+            if (model_config_.cache_quant_bit > 0) {
+                arg->kv_scale->GetShape()->Reshape(
+                    {model_config_.num_layers, 2, (int64_t)kv_cache_max_tokens_,
+                     model_config_.num_kv_heads / tensor_parallel_size_,
+                     model_config_.hidden_dim / model_config_.num_heads / model_config_.cache_quant_group});
+            }
         } else if (model_config_.cache_layout == 3) {
             arg->kv_cache->GetShape()->Reshape(
                 {model_config_.num_layers, 2, model_config_.num_kv_heads / tensor_parallel_size_,
                  (int64_t)kv_cache_max_tokens_, model_config_.hidden_dim / model_config_.num_heads});
-            arg->kv_scale->GetShape()->Reshape(
-                {model_config_.num_layers, 2, model_config_.num_kv_heads / tensor_parallel_size_,
-                 (int64_t)kv_cache_max_tokens_,
-                 model_config_.hidden_dim / model_config_.num_heads / model_config_.cache_quant_group});
+            if (model_config_.cache_quant_bit > 0) {
+                arg->kv_scale->GetShape()->Reshape(
+                    {model_config_.num_layers, 2, model_config_.num_kv_heads / tensor_parallel_size_,
+                     (int64_t)kv_cache_max_tokens_,
+                     model_config_.hidden_dim / model_config_.num_heads / model_config_.cache_quant_group});
+            }
         } else {
             LOG(ERROR) << "impossible status: cache_layout = [" << model_config_.cache_layout << "]";
         }
