@@ -112,6 +112,14 @@ void GRPCServer::Loop(RequestProcessor* processor) {
                 service->RequestGeneration(&new_event->ctx, &new_event->pb_req, &new_event->writer,
                                            arg_.new_call_cq.get(), arg_.notification_cq.get(), new_event);
 
+                if (event->pb_req.req_size() == 0) {
+                    delete event;
+                    break;
+                }
+
+                // change status to SENDING in case that request(s) are sent before Process() finish
+                event->status = GRPCConnection::SENDING;
+
                 for (int req_idx = 0; req_idx < event->pb_req.req_size(); ++req_idx) {
                     auto& pb_req = event->pb_req.req(req_idx);
                     auto req = make_shared<Request>();
@@ -121,10 +129,6 @@ void GRPCServer::Loop(RequestProcessor* processor) {
                     req->generation_length = pb_req.generation_length();
                     processor->Process(req, event);
                 }
-
-                event->send_queue.emplace_back(proto::Response()); // fake item
-                event->status = GRPCConnection::SENDING;
-                event->writer.SendInitialMetadata(event);
                 break;
             default:
                 LOG(ERROR) << "impossible or invalid status [" << (uint32_t)event->status << "] in Loop().";
