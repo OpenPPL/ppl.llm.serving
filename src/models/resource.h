@@ -33,6 +33,7 @@ struct ResourceItem final {
     void* kv_cache_mem = nullptr;
     void* kv_scale_mem = nullptr;
     ppl::nn::Runtime* runtime = nullptr;
+    ppl::nn::DeviceContext* host_device = nullptr;
 };
 
 struct Resource final {

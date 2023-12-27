@@ -39,19 +39,63 @@
 
 namespace ppl { namespace llm { namespace cuda {
 
+struct InferRuntimeParam final {
+    cudaStream_t stream = 0;
+    std::unique_ptr<ppl::nn::Engine> engine;
+    std::unique_ptr<ppl::nn::DeviceContext> input_output_device;
+
+    InferRuntimeParam() {}
+    InferRuntimeParam(InferRuntimeParam&& rhs) {
+        if (this != &rhs) {
+            DoMove(std::move(rhs));
+        }
+    }
+    ~InferRuntimeParam() {
+        DoDestroy();
+    }
+    void operator=(InferRuntimeParam&& rhs) {
+        if (this != &rhs) {
+            DoDestroy();
+            DoMove(std::move(rhs));
+        }
+    }
+
+    // ----- private functions ----- //
+
+    void DoMove(InferRuntimeParam&& rhs) {
+        stream = rhs.stream;
+        rhs.stream = 0;
+        engine = std::move(rhs.engine);
+        input_output_device = std::move(rhs.input_output_device);
+    }
+
+    void DoDestroy() {
+        input_output_device.reset();
+        engine.reset();
+        if (stream) {
+            cudaStreamSynchronize(stream);
+            cudaStreamDestroy(stream);
+        }
+    }
+
+    void operator=(InferRuntimeParam&) = delete;
+    InferRuntimeParam(const InferRuntimeParam&) = delete;
+};
+
 struct CudaResourceManager final {
     ~CudaResourceManager() {
         sampler.reset();
-        
+
         for (auto it = items.begin(); it != items.end(); ++it) {
             cudaFree(it->kv_cache_mem);
             if (it->kv_scale_mem) {
                 cudaFree(it->kv_scale_mem);
             }
             delete it->runtime;
+            delete it->host_device;
         }
 
-        engine_list.clear();
+        runtime_param_list.clear();
 
 #ifdef PPLNN_CUDA_ENABLE_NCCL
         for (auto it = nccl_comm_list.begin(); it != nccl_comm_list.end(); ++it) {
@@ -66,8 +110,9 @@ struct CudaResourceManager final {
 
     std::unique_ptr<ppl::llm::utils::Sampler> CreateCudaSampler(ppl::nn::Runtime* runtime);
     ppl::common::RetCode Init(const ModelConfig& model_config, const ServerConfig& server_config);
+
     ppl::common::StaticThreadPool device_worker_pool;
-    std::vector<std::unique_ptr<ppl::nn::Engine>> engine_list;
+    std::vector<InferRuntimeParam> runtime_param_list;
     std::vector<ppl::llm::ResourceItem> items;
     std::unique_ptr<ppl::llm::utils::Sampler> sampler;
     uint64_t kv_cache_max_tokens;

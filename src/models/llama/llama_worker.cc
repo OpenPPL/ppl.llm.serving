@@ -404,9 +404,9 @@ LLaMAWorker::LLaMAWorker(const Resource& resource, const ModelConfig& mconfig, c
 
         arg->logits = arg->resource->runtime->GetOutputTensor(0);
 
-        arg->decoding_batches->SetDeviceContext(arg->resource->runtime->GetHostDeviceContext());
-        arg->max_seq_len->SetDeviceContext(arg->resource->runtime->GetHostDeviceContext());
-        arg->max_kv_len->SetDeviceContext(arg->resource->runtime->GetHostDeviceContext());
+        arg->decoding_batches->SetDeviceContext(arg->resource->host_device);
+        arg->max_seq_len->SetDeviceContext(arg->resource->host_device);
+        arg->max_kv_len->SetDeviceContext(arg->resource->host_device);
 
         arg->kv_cache->SetBufferPtr(arg->resource->kv_cache_mem);
         if (model_config_.cache_quant_bit > 0) {
@@ -657,6 +657,13 @@ public:
         : id_(id), wc_(wc), arg_list_(arg_list) {}
 
     RetCode Process() {
+        arg_list_[id_].token_ids->FreeBuffer();
+        arg_list_[id_].seq_starts->FreeBuffer();
+        arg_list_[id_].kv_starts->FreeBuffer();
+        arg_list_[id_].cache_indices->FreeBuffer();
+        arg_list_[id_].start_pos->FreeBuffer();
+        arg_list_[id_].logits->FreeBuffer();
+
         RetCode rc;
         // token ids
         arg_list_[id_].token_ids->GetShape()->Reshape({int64_t(wc_->token_inputs.size())});

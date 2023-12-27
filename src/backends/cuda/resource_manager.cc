@@ -21,6 +21,7 @@
 
 #include "ppl/nn/models/onnx/runtime_builder.h"
 #include "ppl/nn/models/onnx/runtime_builder_factory.h"
+#include "ppl/common/cuda/cuda_env.h"
 
 #include <map>
 
@@ -55,10 +56,11 @@ static RetCode InitNccl(uint32_t tensor_parallel_size, std::vector<ncclComm_t>* 
 }
 #endif
 
-static Engine* CreateCudaEngine(int device_id, const std::string& quant_method) {
+static Engine* CreateCudaEngine(int device_id, const std::string& quant_method, cudaStream_t stream) {
     ppl::nn::llm::cuda::EngineOptions options;
     options.device_id = device_id;
     options.mm_policy = ppl::nn::llm::cuda::MM_COMPACT;
+    options.runtime_stream = stream;
 
     if (quant_method == "none") {
         options.quant_method = ppl::nn::llm::cuda::QUANT_METHOD_NONE;
@@ -104,6 +106,10 @@ static Runtime* CreatePPLRuntime(Engine* cuda_engine, const string& model_file) 
     return builder->CreateRuntime();
 }
 
+static void StreamDeleter(void* s) {
+    cudaStreamDestroy((cudaStream_t)s);
+}
+
 class InitTask final {
 public:
     InitTask(uint32_t id, const string& model_dir, uint64_t kv_cache_block_bytes, uint64_t kv_scale_block_bytes,
@@ -119,20 +125,54 @@ public:
         , mgr_(mgr) {}
 
     RetCode Process() {
-        auto engine = unique_ptr<Engine>(CreateCudaEngine(id_, quant_method_));
+        auto rc = InitCudaEnv(id_);
+        if (rc != RC_SUCCESS) {
+            LOG(ERROR) << "InitCudaEnv for device [" << id_ << "] failed.";
+            return rc;
+        }
+
+        cudaStream_t stream;
+        auto cu_ret = cudaStreamCreate(&stream);
+        if (cu_ret != cudaSuccess) {
+            LOG(ERROR) << "cudaStreamCreate failed: " << cudaGetErrorString(cu_ret);
+            return RC_DEVICE_RUNTIME_ERROR;
+        }
+        unique_ptr<void, void(*)(void*)> __stream_guard(stream, StreamDeleter);
+
+        auto engine = unique_ptr<Engine>(CreateCudaEngine(id_, quant_method_, stream));
         if (!engine) {
             LOG(ERROR) << "create cuda engine [" << id_ << "] failed.";
             return RC_OTHER_ERROR;
         }
 
 #ifdef PPLNN_CUDA_ENABLE_NCCL
-        auto rc = engine->Configure(ppl::nn::llm::cuda::ENGINE_CONF_SET_TP_NCCL_COMM, mgr_->nccl_comm_list[id_]);
+        rc = engine->Configure(ppl::nn::llm::cuda::ENGINE_CONF_SET_TP_NCCL_COMM, mgr_->nccl_comm_list[id_]);
         if (rc != RC_SUCCESS) {
             LOG(ERROR) << "engine configure nccl error";
             return RC_OTHER_ERROR;
         }
 #endif
         LOG(INFO) << "create engine [" << id_ << "] success.";
+
+        ppl::nn::llm::cuda::DeviceOptions dev_options;
+        dev_options.mm_policy = ppl::nn::llm::cuda::MM_COMPACT;
+        dev_options.device_id = id_;
+        dev_options.stream = stream;
+
+        unique_ptr<ppl::nn::DeviceContext> input_output_device(
+            ppl::nn::llm::cuda::EngineFactory::CreateDeviceContext(dev_options));
+        if (!input_output_device) {
+            LOG(ERROR) << "create device for input/output failed: ";
+            return RC_DEVICE_RUNTIME_ERROR;
+        }
+
+        unique_ptr<ppl::nn::DeviceContext> host_device(
+            ppl::nn::llm::cuda::EngineFactory::CreateHostDeviceContext(
+                ppl::nn::llm::cuda::HostDeviceOptions()));
+        if (!host_device) {
+            LOG(ERROR) << "create host device failed.";
+            return RC_OUT_OF_MEMORY;
+        }
 
         unique_ptr<Runtime> runtime;
         // TODO load models one by one to reduce memory usage
@@ -144,9 +184,24 @@ public:
                 LOG(ERROR) << "create runtime [" << id_ << "] failed.";
                 return RC_OTHER_ERROR;
             }
+
+            for (uint32_t i = 0; i < runtime->GetInputCount(); ++i) {
+                auto tensor = runtime->GetInputTensor(i);
+                tensor->SetDeviceContext(input_output_device.get());
+            }
+            for (uint32_t i = 0; i < runtime->GetOutputCount(); ++i) {
+                auto tensor = runtime->GetOutputTensor(i);
+                tensor->SetDeviceContext(input_output_device.get());
+            }
         }
 
-        mgr_->engine_list[id_] = std::move(engine);
+        {
+            InferRuntimeParam param;
+            param.stream = stream;
+            param.engine = std::move(engine);
+            param.input_output_device = std::move(input_output_device);
+            mgr_->runtime_param_list[id_] = std::move(param);
+        }
 
         if (id_ == 0) {
             size_t avail_bytes = 0, total = 0;
@@ -167,7 +222,7 @@ public:
 
         ResourceItem item;
 
-        auto cu_ret = cudaMalloc(&item.kv_cache_mem, mgr_->kv_cache_max_tokens * kv_cache_block_bytes_);
+        cu_ret = cudaMalloc(&item.kv_cache_mem, mgr_->kv_cache_max_tokens * kv_cache_block_bytes_);
         if (cu_ret != cudaSuccess) {
             LOG(ERROR) << "alloc kv cache [" << mgr_->kv_cache_max_tokens * kv_cache_block_bytes_
                        << "] failed: " << cudaGetErrorString(cu_ret);
@@ -184,9 +239,11 @@ public:
         }
 
         item.runtime = runtime.release();
+        item.host_device = host_device.release();
 
         mgr_->items[id_] = item;
 
+        __stream_guard.release();
         return RC_SUCCESS;
     }
 
@@ -265,7 +322,7 @@ RetCode CudaResourceManager::Init(const ModelConfig& model_config, const ServerC
     }
 #endif
 
-    this->engine_list.resize(tensor_parallel_size);
+    this->runtime_param_list.resize(tensor_parallel_size);
     this->items.resize(tensor_parallel_size);
 
     rc = this->device_worker_pool.Init(tensor_parallel_size);
@@ -281,7 +338,6 @@ RetCode CudaResourceManager::Init(const ModelConfig& model_config, const ServerC
                                                     server_config.max_tokens_scale,
                                                     server_config.quant_method,
                                                     &alloc_max_mem_barrier, this);
-
     if (rc != RC_SUCCESS) {
         LOG(ERROR) << "ParallelExecute(InitTask) failed.";
         return rc;
