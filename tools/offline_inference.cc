@@ -203,6 +203,7 @@ int main(int argc, char const* argv[]) {
     }
 
     std::cout << "generation time: " << generate_time << std::endl;
-    exit(0);
+    llm_worker.reset();
+
     return 0;
 }
