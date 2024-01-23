@@ -18,8 +18,8 @@
 #include "factory.h"
 #include "models/llama/llama_worker.h"
 #include "models/llama/llama_tokenizer.h"
-#include "models/internlm/internlm_worker.h"
 #include "models/internlm/internlm_tokenizer.h"
+#include "models/baichuan/baichuan_tokenizer.h"
 
 #include "ppl/common/log.h"
 
@@ -31,7 +31,7 @@ namespace ppl { namespace llm {
 
 RequestProcessor* ModelFactory::Create(const std::string& model_type, const Resource& resource,
                                        const ModelConfig& mconfig, const WorkerConfig& wconfig) {
-    if (model_type == "llama") {
+    if (model_type == "llama" || model_type == "baichuan" || model_type == "internlm") {
         auto* llama_worker = new llama::LLaMAWorker(resource, mconfig, wconfig);
         auto rc = llama_worker->Init();
         if (rc != RC_SUCCESS) {
@@ -40,15 +40,6 @@ RequestProcessor* ModelFactory::Create(const std::string& model_type, const Reso
         }
         LOG(INFO) << "Init llama worker successed";
         return llama_worker;
-    } else if (model_type == "internlm") {
-        auto* internlm_worker = new internlm::InternLMWorker(resource, mconfig, wconfig);
-        auto rc = internlm_worker->Init();
-        if (rc != RC_SUCCESS) {
-            LOG(ERROR) << "internlm_worker init failed: " << GetRetCodeStr(rc);
-            return nullptr;
-        }
-        LOG(INFO) << "Init internlm worker successed";
-        return internlm_worker;
     } else {
         LOG(ERROR) << "not supported model: " << model_type;
         return nullptr;
@@ -62,6 +53,10 @@ utils::Tokenizer* TokenizerFactory::Create(const std::string& model_type, const 
         return llama_tokenizer;
     } else if (model_type == "internlm") {
         auto* internlm_tokenizer = new internlm::InternLmTokenizer();
+        internlm_tokenizer->Init(tokenizer_path);
+        return internlm_tokenizer;
+    } else if (model_type == "baichuan") {
+        auto* internlm_tokenizer = new baichuan::BaiChuanTokenizer();
         internlm_tokenizer->Init(tokenizer_path);
         return internlm_tokenizer;
     } else {

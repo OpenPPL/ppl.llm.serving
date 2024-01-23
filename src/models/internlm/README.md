@@ -1,3 +1,8 @@
+# Guide
+
+Config example:
+
+```
 {
     "model_type": "internlm",
     "model_dir":  "/path/to/model/dir",
@@ -21,3 +26,7 @@
     "host": "0.0.0.0",
     "port": 23333
 }
+
+```
+
+Detail: see [LLaMA](../llama/README.md)

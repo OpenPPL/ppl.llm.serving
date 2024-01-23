@@ -1,5 +1,10 @@
+# Guide
+
+Config example:
+
+```
 {
-    "model_type": "internlm",
+    "model_type": "baichuan",
     "model_dir":  "/path/to/model/dir",
     "model_param_path": "/path/to/model/dir/params.json",
     "use_pmx": false,
@@ -21,3 +26,7 @@
     "host": "0.0.0.0",
     "port": 23333
 }
+
+```
+
+Detail: see [LLaMA](../llama/README.md)

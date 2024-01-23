@@ -33,7 +33,7 @@ Here we will explain the config json file with example llama_7b. Presume we've a
 
 - `model_param_path`: path to model params.
 
-- `use_pmx`: if use pmx model.
+- `use_pmx`: whether use serialized pmx model saved by `pplnn_llm`.
 
 - `tokenizer_path`: path to tokenizer.
 
