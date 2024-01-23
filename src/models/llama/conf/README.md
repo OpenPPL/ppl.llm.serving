@@ -6,6 +6,7 @@ Here we will explain the config json file with example llama_7b. Presume we've a
     "model_type": "llama",
     "model_dir":  "/model_data/llama_7b_ppl",
     "model_param_path": "/model_data/llama_7b_ppl/params.json",
+    "use_pmx": false,
 
     "tokenizer_path": "/model_data/llama_fb/tokenizer.model",
 
@@ -31,6 +32,8 @@ Here we will explain the config json file with example llama_7b. Presume we've a
 - `model_dir`: path to the model. 
 
 - `model_param_path`: path to model params.
+
+- `use_pmx`: if use pmx model.
 
 - `tokenizer_path`: path to tokenizer.
 

@@ -23,54 +23,55 @@
 namespace ppl { namespace llm {
 
 struct ServerConfig final {
-    std::string model_type;
-    std::string model_dir;
-    std::string model_param_path;
-    std::string tokenizer_path;
+    std::string model_type = "";
+    std::string model_dir = "";
+    std::string model_param_path = "";
+    std::string tokenizer_path = "";
+    bool use_pmx = false;
 
-    int tensor_parallel_size;
+    int tensor_parallel_size = 0;
 
-    float top_p;
-    int top_k;
+    float top_p = 0.0f;
+    int top_k = 0;
 
-    std::string quant_method;
+    std::string quant_method = "";
 
-    float max_tokens_scale;
-    int max_tokens_per_request;
-    int max_running_batch;
-    int max_tokens_per_step;
+    float max_tokens_scale = 0.0f;
+    int max_tokens_per_request = 0;
+    int max_running_batch = 0;
+    int max_tokens_per_step = 0;
 
-    std::string host;
-    int port;
+    std::string host = "";
+    int port = 0;
 };
 
 struct ModelConfig final {
-    int hidden_dim;
-    int intermediate_dim;
-    int num_layers;
-    int num_heads;
-    int num_kv_heads;
-    int vocab_size;
+    int hidden_dim = 0;
+    int intermediate_dim = 0;
+    int num_layers = 0;
+    int num_heads = 0;
+    int num_kv_heads = 0;
+    int vocab_size = 0;
 
-    float norm_eps; // not used
+    float norm_eps = 0.0f; // not used
 
-    int cache_quant_bit;
-    int cache_quant_group;
+    int cache_quant_bit = 0;
+    int cache_quant_group = 0;
 
-    int cache_layout;
-    int cache_mode;
+    int cache_layout = 0;
+    int cache_mode = 0;
 
-    bool dynamic_batching;
-    bool auto_causal;
+    bool dynamic_batching = false;
+    bool auto_causal = false;
 };
 
 struct WorkerConfig final {
-    float top_p;
-    int top_k;
+    float top_p = 0.0f;
+    int top_k = 0;
 
-    int max_running_batch;
-    int max_tokens_per_request;
-    int max_tokens_per_step;
+    int max_running_batch = 0;
+    int max_tokens_per_request = 0;
+    int max_tokens_per_step = 0;
 };
 
 }} // namespace ppl::llm
