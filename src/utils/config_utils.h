@@ -62,6 +62,13 @@ bool ParseServerConfig(const std::string& config_file, ServerConfig* server_conf
     }
     server_config->model_param_path = it->value.GetString();
 
+    it = json_reader.FindMember("use_pmx");
+    if (it == json_reader.MemberEnd()) {
+        LOG(ERROR) << "find key [use_pmx] failed";
+        return false;
+    }
+    server_config->use_pmx = it->value.GetBool();
+
     it = json_reader.FindMember("tokenizer_path");
     if (it == json_reader.MemberEnd()) {
         LOG(ERROR) << "find key [tokenizer_path] failed";
@@ -144,6 +151,7 @@ bool ParseServerConfig(const std::string& config_file, ServerConfig* server_conf
     LOG(INFO) << "server_config.model_type: " << server_config->model_type;
     LOG(INFO) << "server_config.model_dir: " << server_config->model_dir;
     LOG(INFO) << "server_config.model_param_path: " << server_config->model_param_path;
+    LOG(INFO) << "server_config.use_pmx: " << server_config->use_pmx;
     LOG(INFO) << "server_config.tokenizer_path: " << server_config->tokenizer_path;
 
     LOG(INFO) << "server_config.top_k: " << server_config->top_k;

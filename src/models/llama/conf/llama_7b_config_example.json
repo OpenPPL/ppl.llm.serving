@@ -2,6 +2,7 @@
     "model_type": "llama",
     "model_dir":  "/path/to/model/dir",
     "model_param_path": "/path/to/model/dir/params.json",
+    "use_pmx": false,
 
     "tokenizer_path": "/path/to/tokenizer/tokenizer.model",
 

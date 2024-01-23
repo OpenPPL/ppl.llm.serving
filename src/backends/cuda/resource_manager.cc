@@ -23,6 +23,12 @@
 #include "ppl/nn/models/onnx/runtime_builder_factory.h"
 #include "ppl/common/cuda/cuda_env.h"
 
+#ifdef PPLNN_ENABLE_PMX_MODEL
+#include "ppl/nn/models/pmx/runtime_builder_factory.h"
+#include "ppl/nn/models/pmx/load_model_options.h"
+#include "ppl/nn/models/pmx/save_model_options.h"
+#endif
+
 #include <map>
 
 using namespace ppl::common;
@@ -106,17 +112,48 @@ static Runtime* CreatePPLRuntime(Engine* cuda_engine, const string& model_file) 
     return builder->CreateRuntime();
 }
 
+#ifdef PPLNN_ENABLE_PMX_MODEL
+static ppl::nn::Runtime* CreatePMXPPLRuntime(ppl::nn::Engine* cuda_engine, const std::string& model_file) {
+    auto builder = std::unique_ptr<ppl::nn::pmx::RuntimeBuilder>(ppl::nn::pmx::RuntimeBuilderFactory::Create());
+    if (!builder) {
+        LOG(ERROR) << "create PmxRuntimeBuilder failed.";
+        return nullptr;
+    }
+
+    ppl::nn::pmx::RuntimeBuilder::Resources resources;
+    resources.engines = &cuda_engine;
+    resources.engine_num = 1;
+
+    std::string external_data_dir_fix;
+    ppl::nn::pmx::LoadModelOptions opt;
+    auto status = builder->LoadModel(model_file.c_str(), resources, opt);
+    if (status != ppl::common::RC_SUCCESS) {
+        LOG(ERROR) << "PmxRuntimeBuilder LoadModel failed: " << ppl::common::GetRetCodeStr(status);
+        return nullptr;
+    }
+    
+    status = builder->Preprocess();
+    if (status != ppl::common::RC_SUCCESS) {
+        LOG(ERROR) << "pmx preprocess failed: " << ppl::common::GetRetCodeStr(status);
+        return nullptr;
+    }
+
+    return builder->CreateRuntime();
+}
+#endif //PPLNN_ENABLE_PMX_MODEL
+
 static void StreamDeleter(void* s) {
     cudaStreamDestroy((cudaStream_t)s);
 }
 
 class InitTask final {
 public:
-    InitTask(uint32_t id, const string& model_dir, uint64_t kv_cache_block_bytes, uint64_t kv_scale_block_bytes,
+    InitTask(uint32_t id, const string& model_dir, int use_pmx, uint64_t kv_cache_block_bytes, uint64_t kv_scale_block_bytes,
              float kv_cache_max_tokens_scale, const string& quant_method, Barrier* alloc_max_mem_barrier,
              CudaResourceManager* mgr)
         : id_(id)
         , model_dir_(model_dir)
+        , use_pmx_(use_pmx)
         , kv_cache_block_bytes_(kv_cache_block_bytes)
         , kv_scale_block_bytes_(kv_scale_block_bytes)
         , kv_cache_max_tokens_scale_(kv_cache_max_tokens_scale)
@@ -177,9 +214,28 @@ public:
         unique_ptr<Runtime> runtime;
         // TODO load models one by one to reduce memory usage
         {
-            const string model_path = model_dir_ + "/model_slice_" + std::to_string(id_) + "/model.onnx";
-            LOG(INFO) << "model_slice_" << std::to_string(id_) << ": " << model_path;
-            runtime = unique_ptr<Runtime>(CreatePPLRuntime(engine.get(), model_path));
+#ifndef PPLNN_ENABLE_PMX_MODEL
+            if (use_pmx_) {
+                LOG(ERROR) << "enable PPLNN_ENABLE_PMX_MODEL option to use pmx model.";
+                return RC_OTHER_ERROR;
+            }
+#endif
+
+#ifdef PPLNN_ENABLE_PMX_MODEL
+            if (use_pmx_) 
+            {
+                const string model_path = model_dir_ + "/model_slice_" + std::to_string(id_) + "/model.pmx";
+                LOG(INFO) << "model_slice_" << std::to_string(id_) << ": " << model_path;
+                runtime = unique_ptr<Runtime>(CreatePMXPPLRuntime(engine.get(), model_path));
+            } 
+            else 
+#endif
+            {
+                const string model_path = model_dir_ + "/model_slice_" + std::to_string(id_) + "/model.onnx";
+                LOG(INFO) << "model_slice_" << std::to_string(id_) << ": " << model_path;
+                runtime = unique_ptr<Runtime>(CreatePPLRuntime(engine.get(), model_path));
+            }
+            
             if (!runtime) {
                 LOG(ERROR) << "create runtime [" << id_ << "] failed.";
                 return RC_OTHER_ERROR;
@@ -250,6 +306,7 @@ public:
 private:
     const uint32_t id_;
     const string& model_dir_;
+    const bool use_pmx_;
     const uint64_t kv_cache_block_bytes_;
     const uint64_t kv_scale_block_bytes_;
     const float kv_cache_max_tokens_scale_;
@@ -333,7 +390,8 @@ RetCode CudaResourceManager::Init(const ModelConfig& model_config, const ServerC
 
     Barrier alloc_max_mem_barrier;
     alloc_max_mem_barrier.Reset(tensor_parallel_size);
-    rc = ppl::llm::utils::ParallelExecute<InitTask>(&this->device_worker_pool, server_config.model_dir,
+    rc = ppl::llm::utils::ParallelExecute<InitTask>(&this->device_worker_pool, server_config.model_dir, 
+                                                    server_config.use_pmx,
                                                     kv_cache_block_bytes, kv_scale_block_bytes,
                                                     server_config.max_tokens_scale,
                                                     server_config.quant_method,
