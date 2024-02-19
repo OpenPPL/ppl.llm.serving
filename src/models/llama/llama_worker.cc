@@ -416,13 +416,14 @@ LLaMAWorker::LLaMAWorker(const Resource& resource, const ModelConfig& mconfig, c
 }
 
 LLaMAWorker::~LLaMAWorker() {
-    pthread_mutex_destroy(&uuid_data_lock_);
-
-    if (worker_thread_created_) {
-        pthread_cancel(worker_thread_);
+    if (worker_thread_active_) {
+        worker_thread_active_ = false;
+        pthread_cond_signal(&req_signal_);
         pthread_join(worker_thread_, nullptr);
     }
+
     pthread_cond_destroy(&req_signal_);
+    pthread_mutex_destroy(&uuid_data_lock_);
 }
 
 RetCode LLaMAWorker::Init() {
@@ -486,13 +487,14 @@ RetCode LLaMAWorker::Init() {
         return RC_OTHER_ERROR;
     }
 
+    worker_thread_active_ = true;
     pthread_cond_init(&req_signal_, nullptr);
     auto err = pthread_create(&worker_thread_, nullptr, WorkerThreadFunc, this);
     if (err != 0) {
+        worker_thread_active_ = false;
         LOG(ERROR) << "create worker thread failed.";
         return RC_OTHER_ERROR;
     }
-    worker_thread_created_ = true;
 
     return RC_SUCCESS;
 }
@@ -987,6 +989,10 @@ void* LLaMAWorker::WorkerThreadFunc(void* arg) {
     while (true) {
         pthread_mutex_lock(worker->sched_.GetQueueLock());
         while (worker->sched_.GetPendingSize() == 0) {
+            if (!worker->worker_thread_active_) {
+                pthread_mutex_unlock(worker->sched_.GetQueueLock());
+                return nullptr;
+            }
             LOG(INFO) << "waiting for request ...";
             pthread_cond_wait(&worker->req_signal_, worker->sched_.GetQueueLock());
         }

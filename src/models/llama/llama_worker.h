@@ -174,7 +174,7 @@ private:
 
     uint64_t kv_cache_max_tokens_;
 
-    bool worker_thread_created_ = false;
+    bool worker_thread_active_ = false;
     pthread_t worker_thread_;
 
     pthread_cond_t req_signal_;

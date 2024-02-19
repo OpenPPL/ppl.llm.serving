@@ -209,7 +209,6 @@ GRPCServer::~GRPCServer() {
     arg_.new_call_cq->Shutdown();
 
     if (new_call_thread_created_) {
-        pthread_cancel(new_call_thread_);
         pthread_join(new_call_thread_, nullptr);
     }
 }
