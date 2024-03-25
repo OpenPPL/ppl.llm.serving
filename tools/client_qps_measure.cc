@@ -23,12 +23,6 @@ using grpc::Status;
 using namespace std::chrono;
 using namespace ppl::llm;
 
-static pthread_cond_t finished_cond = PTHREAD_COND_INITIALIZER;
-static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
-static std::unordered_map<int, std::string> rsp_stream_store;
-static int finished_cnt = 0;
-static int num_request = 0;
-
 Define_string_opt("--target", g_flag_target, "localhost:23333", "ip:port");
 Define_string_opt("--tokenizer", g_flag_tokenizer, "", "Path to the tokenizer");
 Define_string_opt("--dataset", g_flag_dataset, "", "Path to the dataset.");
@@ -38,13 +32,21 @@ Define_string_opt("--request_rate", g_flag_request_rate, "inf",
 
 struct TidRecord {
     int prompt_len;
-    int output_len;
+    int exp_output_len;
+    int real_output_len = 0;
     bool is_prefill = true;
     std::chrono::_V2::system_clock::time_point send_time;
     std::chrono::_V2::system_clock::time_point prefill_time;
     std::chrono::_V2::system_clock::time_point finished_time;
+    std::chrono::_V2::system_clock::time_point prev_time;
+
 };
-static std::unordered_map<int64_t, TidRecord> tid_record_map;
+
+static std::unordered_map<int, std::string> g_rsp_stream_store;
+static std::vector<double> g_decode_latecy_list; 
+static int g_finished_cnt = 0;
+static int g_num_request = 0;
+static std::unordered_map<int64_t, TidRecord> g_tid_record_map;
 
 void SampleRequest(const std::string& dataset_path, const sentencepiece::SentencePieceProcessor& tokenizer,
                    std::vector<std::shared_ptr<proto::BatchedRequest>>* req_list) {
@@ -75,9 +77,9 @@ void SampleRequest(const std::string& dataset_path, const sentencepiece::Sentenc
         req->set_generation_length(ans_token_ids.size());
         req_list->push_back(batch_req);
 
-        auto& tid_record = tid_record_map.emplace(tid, TidRecord()).first->second;
+        auto& tid_record = g_tid_record_map.emplace(tid, TidRecord()).first->second;
         tid_record.prompt_len = prompt_token_ids.size();
-        tid_record.output_len = ans_token_ids.size();
+        tid_record.exp_output_len = ans_token_ids.size();
         tid++;
     }
 }
@@ -95,8 +97,8 @@ public:
         for (size_t i = 0; i < req_list.size(); i++) {
             const auto& req_batch = *req_list[i];
 
-            auto it = tid_record_map.find(req_batch.req(0).id());
-            if (it == tid_record_map.end()) {
+            auto it = g_tid_record_map.find(req_batch.req(0).id());
+            if (it == g_tid_record_map.end()) {
                 LOG(ERROR) << "unrecoginized tid: " << req_batch.req(0).id();
                 return;
             }
@@ -117,11 +119,11 @@ public:
             int sleep_us = (sleep_time - float(sleep_s)) * 1000000;
             std::this_thread::sleep_for(std::chrono::microseconds(sleep_s * 1000000 + sleep_us));
         }
-        pthread_mutex_lock(&lock);
-        while (finished_cnt < num_request) {
-            pthread_cond_wait(&finished_cond, &lock);
+        pthread_mutex_lock(&lock_);
+        while (g_finished_cnt < g_num_request) {
+            pthread_cond_wait(&finished_cond_, &lock_);
         }
-        pthread_mutex_unlock(&lock);
+        pthread_mutex_unlock(&lock_);
     }
 
     // Loop while listening for completed responses.
@@ -139,8 +141,8 @@ public:
             AsyncClientCall* call = static_cast<AsyncClientCall*>(got_tag);
             call->HandleResponse(ok);
 
-            if (finished_cnt >= num_request) {
-                pthread_cond_signal(&finished_cond);
+            if (g_finished_cnt >= g_num_request) {
+                pthread_cond_signal(&finished_cond_);
                 break;
             }
         }
@@ -163,12 +165,18 @@ private:
                     if (responseStatus) {
                         auto& rsp = this->reply;
                         int tid = rsp.id();
-                        if (tid_record_map[tid].is_prefill == true) {
-                            tid_record_map[tid].prefill_time = std::chrono::high_resolution_clock::now();
-                            tid_record_map[tid].is_prefill = false;
+                        if (g_tid_record_map[tid].is_prefill == true) {
+                            g_tid_record_map[tid].prefill_time = std::chrono::high_resolution_clock::now();
+                            g_tid_record_map[tid].is_prefill = false;
+                            g_tid_record_map[tid].prev_time = g_tid_record_map[tid].prefill_time;
+                        } else {
+                            auto cur_time = std::chrono::high_resolution_clock::now();
+                            double step_latency = std::chrono::duration_cast<std::chrono::microseconds>(cur_time - g_tid_record_map[tid].prev_time).count() / 1000.0; // ms
+                            g_decode_latecy_list.push_back(step_latency);
                         }
                         const std::string& rsp_stream = rsp.generated();
-                        rsp_stream_store[tid] += rsp_stream;
+                        g_rsp_stream_store[tid] += rsp_stream;
+                        g_tid_record_map[tid].real_output_len += 1;
                         response_reader->Read(&reply, (void*)this);
                     } else {
                         response_reader->Finish(&status, (void*)this);
@@ -176,9 +184,9 @@ private:
                     }
                     break;
                 case FINISH:
-                    __sync_fetch_and_add(&finished_cnt, 1);
-                    tid_record_map[reply.id()].finished_time = std::chrono::high_resolution_clock::now();
-                    LOG(INFO) << "Finish: " << finished_cnt << "/" << num_request;
+                    __sync_fetch_and_add(&g_finished_cnt, 1);
+                    g_tid_record_map[reply.id()].finished_time = std::chrono::high_resolution_clock::now();
+                    LOG(INFO) << "Finish: " << g_finished_cnt << "/" << g_num_request;
                     if (status.ok()) {
                         LOG(INFO) << "Server Response Completed: " << reply.id();
                     } else {
@@ -202,6 +210,8 @@ private:
     std::unique_ptr<proto::LLMService::Stub> stub_;
 
     CompletionQueue cq_;
+    pthread_cond_t finished_cond_ = PTHREAD_COND_INITIALIZER;
+    pthread_mutex_t lock_ = PTHREAD_MUTEX_INITIALIZER;
 };
 
 int main(int argc, char* argv[]) {
@@ -232,7 +242,7 @@ int main(int argc, char* argv[]) {
 
     std::vector<std::shared_ptr<proto::BatchedRequest>> req_list;
     SampleRequest(data_path, tokenizer, &req_list);
-    num_request = req_list.size();
+    g_num_request = req_list.size();
 
     GenerationClientAsync generator(grpc::CreateChannel(target_str, grpc::InsecureChannelCredentials()));
 
@@ -251,39 +261,48 @@ int main(int argc, char* argv[]) {
     double total_prompt_latency = 0; // ms
     int total_input_tokens = 0;
     int total_gen_tokens = 0;
-    for (auto it = tid_record_map.begin(); it != tid_record_map.end(); ++it) {
+    std::vector<double> prefill_latency_list, prompt_latency_list;
+    for (auto it = g_tid_record_map.begin(); it != g_tid_record_map.end(); ++it) {
         auto& tid_record = it->second;
         double prefill_latency = double(
             std::chrono::duration_cast<std::chrono::microseconds>(tid_record.prefill_time - tid_record.send_time).count() /
             1000.0); // ms
 
-        double decoding_tatency = double(
+        double decoding_latency = double(
             std::chrono::duration_cast<std::chrono::microseconds>(tid_record.finished_time - tid_record.prefill_time)
                 .count() /
             1000.0); // ms
         double prompt_latency = double(
             std::chrono::duration_cast<std::chrono::microseconds>(tid_record.finished_time - tid_record.send_time).count() /
             1000.0); // ms
-        // total_latency_per_token += (prompt_latency / tid_record.output_len);
+        // total_latency_per_token += (prompt_latency / tid_record.real_output_len);
         total_prompt_latency += prompt_latency;
 
         total_prefill_latency += prefill_latency;
-        total_decode_latency_per_token += decoding_tatency / (tid_record.output_len - 1);
+
+        total_decode_latency_per_token += tid_record.real_output_len > 1 ? decoding_latency / (tid_record.real_output_len - 1) : 0.0f;
 
         total_input_tokens += tid_record.prompt_len;
-        total_gen_tokens += tid_record.output_len;
+        total_gen_tokens += tid_record.real_output_len;
+
+        prefill_latency_list.push_back(prefill_latency);
+        prompt_latency_list.push_back(prompt_latency);
     }
-    double avg_latency_prefill = total_prefill_latency / num_request;
-    double avg_latency_decode_per_token = total_decode_latency_per_token / num_request;
-    double avg_latency_per_prompt = total_prompt_latency / num_request;
+    double avg_latency_prefill = total_prefill_latency / g_num_request;
+    double avg_latency_decode_per_token = total_decode_latency_per_token / g_num_request;
+    double avg_latency_per_prompt = total_prompt_latency / g_num_request;
+
+    std::sort(prefill_latency_list.begin(), prefill_latency_list.end());
+    std::sort(g_decode_latecy_list.begin(), g_decode_latecy_list.end());
+    std::sort(prompt_latency_list.begin(), prompt_latency_list.end());
 
     fprintf(stderr, "[RESULT] benchmark time: %.2f s\n", benchmark_time);
 
     // 统计: avg inptu len, avg gen len, task num, total gen tokens
-    fprintf(stderr, "[RESULT] request count: %d\n", num_request);
-    fprintf(stderr, "[RESULT] avg input len: %d, total input len: %d\n", total_input_tokens / num_request,
+    fprintf(stderr, "[RESULT] request count: %d\n", g_num_request);
+    fprintf(stderr, "[RESULT] avg input len: %d, total input len: %d\n", total_input_tokens / g_num_request,
             total_input_tokens);
-    fprintf(stderr, "[RESULT] avg gen len: %d, total gen len: %d\n", total_gen_tokens / num_request, total_gen_tokens);
+    fprintf(stderr, "[RESULT] avg gen len: %d, total gen len: %d\n", total_gen_tokens / g_num_request, total_gen_tokens);
     fprintf(stderr, "[RESULT] time per token: %.2f ms\n", benchmark_time * 1000 / total_gen_tokens);
     fprintf(stderr, "[RESULT] avg latency prefill: %.2f ms\n", avg_latency_prefill);
     fprintf(stderr, "[RESULT] avg latency decoding: %.2f ms\n", avg_latency_decode_per_token);
@@ -293,7 +312,23 @@ int main(int argc, char* argv[]) {
     fprintf(stderr, "[RESULT] tokens out per sec: %.2f\n", total_gen_tokens / benchmark_time);
     fprintf(stderr, "[RESULT] tokens inout per sec: %.2f\n", (total_input_tokens + total_gen_tokens) / benchmark_time);
     // qps
-    fprintf(stderr, "[RESULT] requests per sec: %.2f\n", num_request / benchmark_time);
+    fprintf(stderr, "[RESULT] requests per sec: %.2f\n", g_num_request / benchmark_time);
+
+    // distribution
+    fprintf(stderr, "[RESULT] prefill latency distribution (ms): \n    min:[%.2f], 1%%[%.2f], 10%%:[%.2f], 25%%:[%.2f], 50%%:[%.2f], 75%%:[%.2f], 80%%:[%.2f], 90%%:[%.2lf], 95%%[%.2f], 99%%[%.2f], max:[%.2f]\n",
+        prefill_latency_list[0], prefill_latency_list[g_num_request / 100], prefill_latency_list[g_num_request / 10], prefill_latency_list[g_num_request / 4],
+        prefill_latency_list[g_num_request / 2], prefill_latency_list[g_num_request * 3 / 4], prefill_latency_list[g_num_request * 8 / 10],
+        prefill_latency_list[g_num_request * 9 / 10], prefill_latency_list[g_num_request * 95 / 100], prefill_latency_list[g_num_request * 99 / 100], prefill_latency_list[g_num_request - 1]);
+
+    fprintf(stderr, "[RESULT] decode latency per token distribution (ms): \n    min:[%.2f], 1%%[%.2f], 10%%:[%.2f], 25%%:[%.2f], 50%%:[%.2f], 75%%:[%.2f], 80%%:[%.2f], 90%%:[%.2lf], 95%%[%.2f], 99%%[%.2f], max:[%.2f]\n",
+        g_decode_latecy_list[0], g_decode_latecy_list[g_num_request / 100], g_decode_latecy_list[g_num_request / 10], g_decode_latecy_list[g_num_request / 4],
+        g_decode_latecy_list[g_num_request / 2], g_decode_latecy_list[g_num_request * 3 / 4], g_decode_latecy_list[g_num_request * 8 / 10],
+        g_decode_latecy_list[g_num_request * 9 / 10], g_decode_latecy_list[g_num_request * 95 / 100], g_decode_latecy_list[g_num_request * 99 / 100], g_decode_latecy_list[g_num_request - 1]);
+
+    fprintf(stderr, "[RESULT] prompt latency distribution (ms): \n    min:[%.2f], 1%%[%.2f], 10%%:[%.2f], 25%%:[%.2f], 50%%:[%.2f], 75%%:[%.2f], 80%%:[%.2f], 90%%:[%.2lf], 95%%[%.2f], 99%%[%.2f], max:[%.2f]\n",
+        prompt_latency_list[0], prompt_latency_list[g_num_request / 100], prompt_latency_list[g_num_request / 10], prompt_latency_list[g_num_request / 4],
+        prompt_latency_list[g_num_request / 2], prompt_latency_list[g_num_request * 3 / 4], prompt_latency_list[g_num_request * 8 / 10],
+        prompt_latency_list[g_num_request * 9 / 10], prompt_latency_list[g_num_request * 95 / 100], prompt_latency_list[g_num_request * 99 / 100], prompt_latency_list[g_num_request - 1]);
 
     recv_thread.join();
     return 0;
