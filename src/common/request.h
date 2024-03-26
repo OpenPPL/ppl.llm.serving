@@ -31,6 +31,7 @@ struct Request final {
     std::string prompt;
     float temperature;
     uint32_t generation_length;
+    bool early_stopping;
 };
 
 }} // namespace ppl::llm

@@ -522,6 +522,7 @@ static bool ParseRequest(const LlamaRequest& req, const RequestCheckResult& chec
     auto& tid_ctrl = tid_controllers->emplace(tid, TidController()).first->second;
     tid_ctrl.tid = tid;
     tid_ctrl.temperature = req.orig->temperature;
+    tid_ctrl.early_stopping = req.orig->early_stopping;
     tid_ctrl.rest_iters = check_res.rest_iters;
     tid_ctrl.first_fill_len = check_res.first_fill_len;
     tid_ctrl.total_len = check_res.first_fill_len + check_res.rest_iters;
@@ -910,7 +911,7 @@ void LLaMAWorker::Work() {
                 // finished task
                 bool is_shutdown =
                     worker_controller_.tid_shutdown.find(tid_ctrl->tid) != worker_controller_.tid_shutdown.end();
-                if (tid_ctrl->rest_iters <= 0 || tokenizer_->IsEosId(gen_token) || is_shutdown) {
+                if (tid_ctrl->rest_iters <= 0 || (tid_ctrl->early_stopping && tokenizer_->IsEosId(gen_token)) || is_shutdown) {
                     tid_gen_token_list_.back().is_last = true;
                     if (cache_cool_down_count > 0)
                         cache_cool_down_count--;

@@ -35,6 +35,7 @@ public:
             req->set_prompt(prompts[i]);
             req->set_temperature(1);
             req->set_generation_length(64);
+            req->set_early_stopping(true);
             rsp_stream_store[i] = "";
         }
         // response

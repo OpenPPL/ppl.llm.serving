@@ -311,6 +311,7 @@ public:
             req->set_prompt(prompts[i]);
             req->set_temperature(0.9);
             req->set_generation_length(512);
+            req->set_early_stopping(true);
             // req->set_generation_length(generation_len[i]);
 
             tid_map.emplace(req->id(), req);
