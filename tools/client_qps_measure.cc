@@ -29,6 +29,8 @@ Define_string_opt("--dataset", g_flag_dataset, "", "Path to the dataset.");
 Define_string_opt("--request_rate", g_flag_request_rate, "inf",
                   "Number of request per second. If this is inf, then all the requests are sent at time 0. Otherwise, "
                   "we use Poisson process to synthesize the request arrival times.");
+Define_bool_opt("--early_stopping", g_flag_early_stopping, true,
+                  "whether enable early stopping when met end token id");
 
 struct TidRecord {
     int prompt_len;
@@ -49,7 +51,7 @@ static int g_num_request = 0;
 static std::unordered_map<int64_t, TidRecord> g_tid_record_map;
 
 void SampleRequest(const std::string& dataset_path, const sentencepiece::SentencePieceProcessor& tokenizer,
-                   std::vector<std::shared_ptr<proto::BatchedRequest>>* req_list) {
+                   std::vector<std::shared_ptr<proto::BatchedRequest>>* req_list, bool early_stopping) {
     std::ifstream ifs(dataset_path);
     rapidjson::IStreamWrapper isw(ifs);
     rapidjson::Document root;
@@ -75,6 +77,7 @@ void SampleRequest(const std::string& dataset_path, const sentencepiece::Sentenc
         req->set_prompt(prompt);
         req->set_temperature(1);
         req->set_generation_length(ans_token_ids.size());
+        req->set_early_stopping(early_stopping);
         req_list->push_back(batch_req);
 
         auto& tid_record = g_tid_record_map.emplace(tid, TidRecord()).first->second;
@@ -241,7 +244,7 @@ int main(int argc, char* argv[]) {
               << "; EOS ID: " << tokenizer.eos_id() << "; PAD ID: " << tokenizer.pad_id();
 
     std::vector<std::shared_ptr<proto::BatchedRequest>> req_list;
-    SampleRequest(data_path, tokenizer, &req_list);
+    SampleRequest(data_path, tokenizer, &req_list, g_flag_early_stopping);
     g_num_request = req_list.size();
 
     GenerationClientAsync generator(grpc::CreateChannel(target_str, grpc::InsecureChannelCredentials()));
@@ -261,6 +264,7 @@ int main(int argc, char* argv[]) {
     double total_prompt_latency = 0; // ms
     int total_input_tokens = 0;
     int total_gen_tokens = 0;
+    int total_exp_gen_tokens = 0;
     std::vector<double> prefill_latency_list, prompt_latency_list;
     for (auto it = g_tid_record_map.begin(); it != g_tid_record_map.end(); ++it) {
         auto& tid_record = it->second;
@@ -283,6 +287,7 @@ int main(int argc, char* argv[]) {
         total_decode_latency_per_token += tid_record.real_output_len > 1 ? decoding_latency / (tid_record.real_output_len - 1) : 0.0f;
 
         total_input_tokens += tid_record.prompt_len;
+        total_exp_gen_tokens += tid_record.exp_output_len;
         total_gen_tokens += tid_record.real_output_len;
 
         prefill_latency_list.push_back(prefill_latency);
@@ -302,7 +307,7 @@ int main(int argc, char* argv[]) {
     fprintf(stderr, "[RESULT] request count: %d\n", g_num_request);
     fprintf(stderr, "[RESULT] avg input len: %d, total input len: %d\n", total_input_tokens / g_num_request,
             total_input_tokens);
-    fprintf(stderr, "[RESULT] avg gen len: %d, total gen len: %d\n", total_gen_tokens / g_num_request, total_gen_tokens);
+    fprintf(stderr, "[RESULT] avg gen len: %d, real total gen len: %d, expected total gen len: %d\n", total_gen_tokens / g_num_request, total_gen_tokens, total_exp_gen_tokens);
     fprintf(stderr, "[RESULT] time per token: %.2f ms\n", benchmark_time * 1000 / total_gen_tokens);
     fprintf(stderr, "[RESULT] avg latency prefill: %.2f ms\n", avg_latency_prefill);
     fprintf(stderr, "[RESULT] avg latency decoding: %.2f ms\n", avg_latency_decode_per_token);

@@ -11,6 +11,7 @@ message Request {
     float temperature = 2;
     uint32 generation_length = 3;
     string prompt = 4;
+    bool early_stopping = 5;
 }
 
 message BatchedRequest {

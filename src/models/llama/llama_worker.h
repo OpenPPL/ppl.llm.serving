@@ -48,6 +48,7 @@ struct TidController final {
     // init
     uint64_t tid;
     float temperature;
+    bool early_stopping;
 
     bool is_first_fill = true;
     int first_fill_len; // update

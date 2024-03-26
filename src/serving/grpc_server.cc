@@ -127,6 +127,7 @@ void GRPCServer::Loop(RequestProcessor* processor) {
                     req->prompt = pb_req.prompt();
                     req->temperature = pb_req.temperature();
                     req->generation_length = pb_req.generation_length();
+                    req->early_stopping = pb_req.early_stopping();
                     processor->Process(req, event);
                 }
                 break;
