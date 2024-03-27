@@ -18,13 +18,13 @@
 #ifndef __PPL_LLM_LLAMA_WORKER_H__
 #define __PPL_LLM_LLAMA_WORKER_H__
 
-#include "common/processor.h"
-#include "models/config.h"
-#include "models/resource.h"
-#include "utils/index_manager.h"
-#include "utils/queue_request_scheduler.h"
-#include "utils/sampler.h"
-#include "utils/tokenizer.h"
+#include "../../common/processor.h"
+#include "../../models/config.h"
+#include "../../models/resource.h"
+#include "../../utils/index_manager.h"
+#include "../../utils/queue_request_scheduler.h"
+#include "../../utils/sampler.h"
+#include "../../utils/tokenizer.h"
 
 #include "ppl/nn/models/onnx/runtime_builder_factory.h"
 #include "ppl/nn/runtime/tensor.h"

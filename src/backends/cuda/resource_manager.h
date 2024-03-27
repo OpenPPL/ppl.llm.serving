@@ -18,9 +18,9 @@
 #ifndef __PPL_LLM_CUDA_RESOURCE_MANAGER_H__
 #define __PPL_LLM_CUDA_RESOURCE_MANAGER_H__
 
-#include "models/config.h"
-#include "models/resource.h"
-#include "utils/sampler.h"
+#include "../../models/config.h"
+#include "../../models/resource.h"
+#include "../../utils/sampler.h"
 
 #include "ppl/common/log.h"
 #include "ppl/common/barrier.h"

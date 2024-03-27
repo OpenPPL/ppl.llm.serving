@@ -16,10 +16,10 @@
 // under the License.
 
 #include "factory.h"
-#include "models/llama/llama_worker.h"
-#include "models/llama/llama_tokenizer.h"
-#include "models/internlm/internlm_tokenizer.h"
-#include "models/baichuan/baichuan_tokenizer.h"
+#include "llama/llama_worker.h"
+#include "llama/llama_tokenizer.h"
+#include "internlm/internlm_tokenizer.h"
+#include "baichuan/baichuan_tokenizer.h"
 
 #include "ppl/common/log.h"
 

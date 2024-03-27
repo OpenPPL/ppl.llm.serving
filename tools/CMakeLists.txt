@@ -1,7 +1,7 @@
 if(PPLNN_USE_LLM_CUDA)
     add_executable(offline_inference tools/offline_inference.cc)
-    target_include_directories(offline_inference PRIVATE ${HPCC_DEPS_DIR}/rapidjson/include)
-    target_link_libraries(offline_inference ppl_llm_static ${NCCL_LIBRARIES})
+    target_include_directories(offline_inference PRIVATE src)
+    target_link_libraries(offline_inference PRIVATE ppl_llm_static ${NCCL_LIBRARIES})
 
     if(PPL_LLM_ENABLE_GRPC_SERVING)
         add_executable(ppl_llm_server tools/llm_server.cc)

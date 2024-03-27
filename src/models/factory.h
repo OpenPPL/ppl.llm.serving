@@ -18,10 +18,10 @@
 #ifndef __PPL_LLM_FACTORY_H__
 #define __PPL_LLM_FACTORY_H__
 
-#include "common/processor.h"
-#include "models/resource.h"
-#include "models/config.h"
-#include "utils/tokenizer.h"
+#include "../common/processor.h"
+#include "../utils/tokenizer.h"
+#include "resource.h"
+#include "config.h"
 
 #include <string>
 

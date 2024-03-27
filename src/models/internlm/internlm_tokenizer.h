@@ -18,7 +18,7 @@
 #ifndef __PPL_LLM_INTERNLM_TOKENIZER_H__
 #define __PPL_LLM_INTERNLM_TOKENIZER_H__
 
-#include "utils/tokenizer.h"
+#include "../../utils/tokenizer.h"
 
 #include "absl/strings/string_view.h"
 #include "ppl/nn/common/logger.h"

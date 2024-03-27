@@ -16,8 +16,8 @@
 // under the License.
 
 #include "resource_manager.h"
-#include "backends/cuda/sampler.h"
-#include "utils/utils.h"
+#include "sampler.h"
+#include "../../utils/utils.h"
 
 #include "ppl/nn/models/onnx/runtime_builder.h"
 #include "ppl/nn/models/onnx/runtime_builder_factory.h"
@@ -131,7 +131,7 @@ static ppl::nn::Runtime* CreatePMXPPLRuntime(ppl::nn::Engine* cuda_engine, const
         LOG(ERROR) << "PmxRuntimeBuilder LoadModel failed: " << ppl::common::GetRetCodeStr(status);
         return nullptr;
     }
-    
+
     status = builder->Preprocess();
     if (status != ppl::common::RC_SUCCESS) {
         LOG(ERROR) << "pmx preprocess failed: " << ppl::common::GetRetCodeStr(status);
@@ -222,20 +222,20 @@ public:
 #endif
 
 #ifdef PPLNN_ENABLE_PMX_MODEL
-            if (use_pmx_) 
+            if (use_pmx_)
             {
                 const string model_path = model_dir_ + "/model_slice_" + std::to_string(id_) + "/model.pmx";
                 LOG(INFO) << "model_slice_" << std::to_string(id_) << ": " << model_path;
                 runtime = unique_ptr<Runtime>(CreatePMXPPLRuntime(engine.get(), model_path));
-            } 
-            else 
+            }
+            else
 #endif
             {
                 const string model_path = model_dir_ + "/model_slice_" + std::to_string(id_) + "/model.onnx";
                 LOG(INFO) << "model_slice_" << std::to_string(id_) << ": " << model_path;
                 runtime = unique_ptr<Runtime>(CreatePPLRuntime(engine.get(), model_path));
             }
-            
+
             if (!runtime) {
                 LOG(ERROR) << "create runtime [" << id_ << "] failed.";
                 return RC_OTHER_ERROR;
@@ -390,7 +390,7 @@ RetCode CudaResourceManager::Init(const ModelConfig& model_config, const ServerC
 
     Barrier alloc_max_mem_barrier;
     alloc_max_mem_barrier.Reset(tensor_parallel_size);
-    rc = ppl::llm::utils::ParallelExecute<InitTask>(&this->device_worker_pool, server_config.model_dir, 
+    rc = ppl::llm::utils::ParallelExecute<InitTask>(&this->device_worker_pool, server_config.model_dir,
                                                     server_config.use_pmx,
                                                     kv_cache_block_bytes, kv_scale_block_bytes,
                                                     server_config.max_tokens_scale,

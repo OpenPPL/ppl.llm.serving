@@ -16,7 +16,7 @@
 // under the License.
 
 #include "llama_worker.h"
-#include "utils/utils.h"
+#include "../../utils/utils.h"
 
 #include "ppl/nn/common/logger.h"
 

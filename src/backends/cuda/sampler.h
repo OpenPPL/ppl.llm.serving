@@ -18,7 +18,7 @@
 #ifndef __PPL_LLM_CUDA_SAMPLER_H__
 #define __PPL_LLM_CUDA_SAMPLER_H__
 
-#include "utils/sampler.h"
+#include "../../utils/sampler.h"
 #include <cuda_runtime.h>
 
 namespace ppl { namespace llm { namespace cuda {

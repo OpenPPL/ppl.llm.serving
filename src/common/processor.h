@@ -18,8 +18,8 @@
 #ifndef __PPL_LLM_PROCESSOR_H__
 #define __PPL_LLM_PROCESSOR_H__
 
-#include "common/request.h"
-#include "common/connection.h"
+#include "request.h"
+#include "connection.h"
 
 #include <memory>
 

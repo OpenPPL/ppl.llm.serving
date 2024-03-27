@@ -1,7 +1,7 @@
 #ifndef __PPL_LLM_CONNECTION_H__
 #define __PPL_LLM_CONNECTION_H__
 
-#include "common/response.h"
+#include "response.h"
 
 namespace ppl { namespace llm {
 

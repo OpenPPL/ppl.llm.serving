@@ -6,12 +6,17 @@ option(PPL_LLM_ENABLE_LLAMA "" ON)
 option(PPL_LLM_ENABLE_PROFILING "" ON)
 option(PPL_LLM_ENABLE_DEBUG "" OFF)
 option(PPL_LLM_SERVING_BUILD_TOOLS "" ON)
+option(PPL_LLM_INSTALL "" ON)
 
 # --------------------------------------------------------------------------- #
 
 if(PPL_LLM_ENABLE_LLAMA)
     set(CMAKE_CXX_STANDARD 17)
 endif()
+
+set(PPLNN_INSTALL ${PPL_LLM_INSTALL})
+
+set(CMAKE_INSTALL_LIBDIR "lib")
 
 include(cmake/deps.cmake)
 string(REPLACE "-Werror=non-virtual-dtor" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
@@ -78,6 +83,12 @@ endif()
 # --------------------------------------------------------------------------- #
 
 include(cmake/llm.cmake)
+
+# --------------------------------------------------------------------------- #
+
+if(PPL_LLM_INSTALL)
+    include(cmake/install.cmake)
+endif()
 
 # --------------------------------------------------------------------------- #
 

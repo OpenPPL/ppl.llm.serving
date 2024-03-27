@@ -29,7 +29,6 @@ if(NOT PPL_LLM_SENTENCEPIECE_PROTOBUF_LIBS)
         ${__SP_GENERATED_FILES__}
         ${__SPM_GENERATED_FILES__})
     target_link_libraries(ppl_sentencepiece_pb_static PUBLIC libprotobuf)
-    target_compile_features(ppl_sentencepiece_pb_static PUBLIC cxx_std_17)
 
     unset(__SPM_GENERATED_FILES__)
     unset(__SP_GENERATED_FILES__)
@@ -74,8 +73,12 @@ target_include_directories(ppl_sentencepiece_static PUBLIC
     ${__PPL_LLAMA_GENERATED_DIR__}
     ${__SENTENCEPIECE_ROOT_DIR__}
     ${__SENTENCEPIECE_ROOT_DIR__}/src)
-target_compile_features(ppl_sentencepiece_static PUBLIC cxx_std_17)
 target_compile_definitions(ppl_sentencepiece_static PRIVATE _USE_EXTERNAL_PROTOBUF)
+
+if(PPL_LLM_INSTALL)
+    install(TARGETS ppl_sentencepiece_pb_static DESTINATION lib)
+    install(TARGETS ppl_sentencepiece_static DESTINATION lib)
+endif()
 
 unset(__SENTENCEPIECE_ROOT_DIR__)
 unset(__PPL_LLAMA_GENERATED_DIR__)

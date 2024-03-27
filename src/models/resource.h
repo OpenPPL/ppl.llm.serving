@@ -18,8 +18,8 @@
 #ifndef __PPL_LLM_RESOURCE_H__
 #define __PPL_LLM_RESOURCE_H__
 
-#include "utils/tokenizer.h"
-#include "utils/sampler.h"
+#include "../utils/tokenizer.h"
+#include "../utils/sampler.h"
 
 #include "ppl/common/threadpool.h"
 #include "ppl/nn/runtime/runtime.h"
