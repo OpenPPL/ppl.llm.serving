@@ -5,7 +5,6 @@
 #include "rapidjson/document.h"
 #include "rapidjson/istreamwrapper.h"
 #include "grpc++/grpc++.h"
-#include "sentencepiece_processor.h"
 
 #include <chrono>
 #include <fstream>
@@ -24,7 +23,6 @@ using namespace std::chrono;
 using namespace ppl::llm;
 
 Define_string_opt("--target", g_flag_target, "localhost:23333", "ip:port");
-Define_string_opt("--tokenizer", g_flag_tokenizer, "", "Path to the tokenizer");
 Define_string_opt("--dataset", g_flag_dataset, "", "Path to the dataset.");
 Define_string_opt("--request_rate", g_flag_request_rate, "inf",
                   "Number of request per second. If this is inf, then all the requests are sent at time 0. Otherwise, "
@@ -50,8 +48,7 @@ static int g_finished_cnt = 0;
 static int g_num_request = 0;
 static std::unordered_map<int64_t, TidRecord> g_tid_record_map;
 
-void SampleRequest(const std::string& dataset_path, const sentencepiece::SentencePieceProcessor& tokenizer,
-                   std::vector<std::shared_ptr<proto::BatchedRequest>>* req_list, bool early_stopping) {
+void SampleRequest(const std::string& dataset_path, std::vector<std::shared_ptr<proto::BatchedRequest>>* req_list, bool early_stopping) {
     std::ifstream ifs(dataset_path);
     rapidjson::IStreamWrapper isw(ifs);
     rapidjson::Document root;
@@ -62,29 +59,26 @@ void SampleRequest(const std::string& dataset_path, const sentencepiece::Sentenc
     LOG(INFO) << "request size: " << root.Size();
     uint64_t tid = 0;
     for (size_t i = 0; i < root.Size(); ++i) {
-        const auto& convs = root[i]["conversations"];
-        const std::string prompt = convs[0]["value"].GetString();
-        const std::string ans = convs[1]["value"].GetString();
-
-        std::vector<int> prompt_token_ids;
-        std::vector<int> ans_token_ids;
-        tokenizer.Encode(prompt, &prompt_token_ids);
-        tokenizer.Encode(ans, &ans_token_ids);
-
+        const auto& input_token_ids = root[i]["input_token_ids"].GetArray();
+        const int gen_len = 200;
         auto batch_req = std::make_shared<proto::BatchedRequest>(); // batch_size = 1
         auto* req = batch_req->add_req();
         req->set_id(tid);
-        req->set_prompt(prompt);
         req->set_temperature(1);
+        auto* pb_tokens = req->mutable_tokens();
+        for (auto it = input_token_ids.begin(); it != input_token_ids.end(); ++it) {
+            pb_tokens->add_ids(it->GetInt());
+        }
+
         auto* stopping_parameters = req->mutable_stopping_parameters();
-        stopping_parameters->set_max_new_tokens(ans_token_ids.size());
+        stopping_parameters->set_max_new_tokens(gen_len);
         stopping_parameters->set_ignore_eos_token(!early_stopping);
         req_list->push_back(batch_req);
 
         auto& tid_record = g_tid_record_map.emplace(tid, TidRecord()).first->second;
-        tid_record.prompt_len = prompt_token_ids.size();
-        tid_record.exp_output_len = ans_token_ids.size();
-        tid++;
+        tid_record.prompt_len = input_token_ids.Size();
+        tid_record.exp_output_len = gen_len;
+        ++tid;
     }
 }
 
@@ -232,20 +226,10 @@ int main(int argc, char* argv[]) {
     }
 
     const std::string target_str = g_flag_target;
-    const std::string tokenizer_path = g_flag_tokenizer; // LLaMA/tokenizer.model
     const std::string data_path = g_flag_dataset; // samples_1024.json
 
-    sentencepiece::SentencePieceProcessor tokenizer;
-    const auto tokenizer_status = tokenizer.Load(tokenizer_path);
-    if (!tokenizer_status.ok()) {
-        LOG(ERROR) << tokenizer_status.ToString();
-        return -1;
-    }
-    LOG(INFO) << "VOCAB_SIZE: " << tokenizer.GetPieceSize() << "; BOS ID: " << tokenizer.bos_id()
-              << "; EOS ID: " << tokenizer.eos_id() << "; PAD ID: " << tokenizer.pad_id();
-
     std::vector<std::shared_ptr<proto::BatchedRequest>> req_list;
-    SampleRequest(data_path, tokenizer, &req_list, g_flag_early_stopping);
+    SampleRequest(data_path, &req_list, g_flag_early_stopping);
     g_num_request = req_list.size();
 
     GenerationClientAsync generator(grpc::CreateChannel(target_str, grpc::InsecureChannelCredentials()));

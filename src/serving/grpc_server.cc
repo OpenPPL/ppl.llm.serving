@@ -70,7 +70,13 @@ void GRPCConnection::Send(const Response& res) {
     proto::Response pb_res;
     pb_res.set_status(is_last ? proto::FINISHED : proto::PROCESSING);
     pb_res.set_id(res.id);
-    pb_res.set_generated(res.generated);
+
+    if (!res.generated.empty()) {
+        pb_res.set_generated(res.generated);
+    } else {
+        auto* tokens = pb_res.mutable_tokens();
+        tokens->add_ids(res.token);
+    }
     SendOneRes(std::move(pb_res), is_last, this);
 }
 
@@ -124,10 +130,15 @@ void GRPCServer::Loop(RequestProcessor* processor) {
                     auto& pb_req = event->pb_req.req(req_idx);
                     auto req = make_shared<Request>();
                     req->id = pb_req.id();
-                    req->prompt = pb_req.prompt();
+                    if (!pb_req.prompt().empty()) {
+                        req->prompt = pb_req.prompt();
+                    } else {
+                        req->token_ids = std::make_shared<std::vector<int>>(pb_req.tokens().ids().begin(), pb_req.tokens().ids().end());
+                        req->stop_tokens = std::make_shared<std::unordered_set<int>>(pb_req.stopping_parameters().stop_tokens().ids().begin(), pb_req.stopping_parameters().stop_tokens().ids().begin());
+                    }
                     req->temperature = pb_req.temperature();
-                    req->generation_length = pb_req.generation_length();
-                    req->early_stopping = pb_req.early_stopping();
+                    req->generation_length = pb_req.stopping_parameters().max_new_tokens();
+                    req->early_stopping = !pb_req.stopping_parameters().ignore_eos_token();
                     processor->Process(req, event);
                 }
                 break;

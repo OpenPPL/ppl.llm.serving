@@ -20,6 +20,9 @@
 
 #include <stdint.h>
 #include <string>
+#include <vector>
+#include <unordered_set>
+#include <memory>
 
 namespace ppl { namespace llm {
 
@@ -32,6 +35,9 @@ struct Request final {
     float temperature;
     uint32_t generation_length;
     bool early_stopping;
+    std::shared_ptr<std::vector<int>> token_ids;
+    std::shared_ptr<std::unordered_set<int>> stop_tokens;
+    
 };
 
 }} // namespace ppl::llm

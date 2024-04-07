@@ -38,10 +38,11 @@
 namespace ppl { namespace llm { namespace llama {
 
 struct TidGenToken final {
-    TidGenToken(uint64_t _tid, int _token, bool _is_last) : tid(_tid), token(_token), is_last(_is_last) {}
+    TidGenToken(uint64_t _tid, int _token, bool _is_last, bool _is_token_in_out) : tid(_tid), token(_token), is_last(_is_last), is_token_in_out(_is_token_in_out) {}
     uint64_t tid;
     int token;
     bool is_last;
+    bool is_token_in_out;
 };
 
 struct TidController final {
@@ -59,7 +60,9 @@ struct TidController final {
     int rest_iters; // update
     int passed_iters = 0; // update
 
-    std::vector<int> next_tokens; // update
+    std::shared_ptr<std::vector<int>> next_tokens; // update
+    std::shared_ptr<std::unordered_set<int>> stop_tokens;
+    bool is_token_in_out = false;
 };
 
 struct WorkerController final {
@@ -122,7 +125,9 @@ struct LlamaRequest final {
     uint64_t uuid;
     Connection* conn;
     std::shared_ptr<Request> orig;
-    std::vector<int> token_id_list;
+    std::shared_ptr<std::vector<int>> token_id_list;
+    std::shared_ptr<std::unordered_set<int>> stop_tokens;
+    bool is_token_in_out;
 };
 
 class LLaMAWorker final : public RequestProcessor {
@@ -164,8 +169,6 @@ private:
 
     WorkerController worker_controller_;
     std::vector<WorkerThreadArg> worker_thread_args_;
-
-    std::vector<TidGenToken> tid_gen_token_list_;
 
     ppl::common::StaticThreadPool decoder_thread_pool_;
     pthread_mutex_t tid_shutdown_lock_;
