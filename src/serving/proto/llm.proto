@@ -6,12 +6,27 @@ service LLMService {
     rpc Generation (BatchedRequest) returns (stream Response) {}
 }
 
+message Tokens {
+    /// Token IDs
+    repeated uint32 ids = 1;
+}
+
+message StoppingCriteriaParameters {
+    /// Maximum number of generated tokens
+    uint32 max_new_tokens = 1;
+    /// Optional stopping tokens array
+    Tokens stop_tokens = 2;
+    /// Ignore end of sequence token
+    /// used for benchmarking
+    bool ignore_eos_token = 3;
+}
+
 message Request {
     uint64 id = 1;
     float temperature = 2;
-    uint32 generation_length = 3;
-    string prompt = 4;
-    bool early_stopping = 5;
+    string prompt = 3;
+    Tokens tokens = 4;
+    StoppingCriteriaParameters stopping_parameters = 5;
 }
 
 message BatchedRequest {
@@ -28,4 +43,5 @@ message Response {
     Status status = 1;
     uint64 id = 2;
     string generated = 3;
+    Tokens tokens = 4;
 }

@@ -310,10 +310,9 @@ public:
             req->set_id(start_tid + i);
             req->set_prompt(prompts[i]);
             req->set_temperature(0.9);
-            req->set_generation_length(512);
-            req->set_early_stopping(true);
-            // req->set_generation_length(generation_len[i]);
-
+            auto* stopping_parameters = req->mutable_stopping_parameters();
+            stopping_parameters->set_max_new_tokens(512);
+            stopping_parameters->set_ignore_eos_token(false);
             tid_map.emplace(req->id(), req);
 
             req_queue[i] = req;
@@ -329,7 +328,10 @@ public:
                 req->set_id(req_queue[i]->id());
                 req->set_prompt(req_queue[i]->prompt());
                 req->set_temperature(req_queue[i]->temperature());
-                req->set_generation_length(req_queue[i]->generation_length());
+
+                auto* stopping_parameters = req->mutable_stopping_parameters();
+                stopping_parameters->set_max_new_tokens(req_queue[i]->stopping_parameters().max_new_tokens());
+                stopping_parameters->set_ignore_eos_token(false);
             }
             req_queue.clear();
 

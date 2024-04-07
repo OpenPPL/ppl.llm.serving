@@ -58,6 +58,10 @@ public:
         return token_id == sp_processor_.eos_id();
     }
 
+    int GetEosId() const override {
+        return sp_processor_.eos_id();
+    }
+
 private:
     bool IsNewWord(int token_id) const {
         return sp_processor_.IdToPiece(token_id).substr(0, 3) == "▁";

@@ -6,6 +6,7 @@
 #include "absl/flags/flag.h"
 #include "absl/flags/parse.h"
 #include "llm.grpc.pb.h"
+#include "sentencepiece_processor.h"
 
 #include <grpc++/grpc++.h>
 #include <chrono>
@@ -23,21 +24,28 @@ class GenerationClient {
 public:
     GenerationClient(std::shared_ptr<Channel> channel) : stub_(proto::LLMService::NewStub(channel)) {}
 
-    int Generation(const std::vector<std::string>& prompts) {
+    int Generation(const std::vector<std::string>& prompts, const sentencepiece::SentencePieceProcessor& tokenizer) {
         // Data we are sending to the server.
         ClientContext context;
         proto::BatchedRequest req_list;
-        std::unordered_map<int, std::string> rsp_stream_store;
+        std::unordered_map<int, std::vector<int>> rsp_stream_store;
         for (size_t i = 0; i < prompts.size(); i++) {
             // request
             auto req = req_list.add_req();
             req->set_id(i);
-            req->set_prompt(prompts[i]);
+
+            std::vector<int> prompt_token_ids;
+            tokenizer.Encode(prompts[i], &prompt_token_ids);
+
+            auto* pb_tokens = req->mutable_tokens();
+            for (auto token : prompt_token_ids) {
+                pb_tokens->add_ids(token);
+            }
             req->set_temperature(1);
             auto* stopping_parameters = req->mutable_stopping_parameters();
             stopping_parameters->set_max_new_tokens(64);
             stopping_parameters->set_ignore_eos_token(false);
-            rsp_stream_store[i] = "";
+            rsp_stream_store[i] = {};
         }
         // response
         proto::Response rsp;
@@ -55,8 +63,9 @@ public:
             }
 
             int tid = rsp.id();
-            std::string rsp_stream = rsp.generated();
-            rsp_stream_store[tid] += rsp_stream;
+            // std::string rsp_stream = rsp.generated();
+            int token = rsp.tokens().ids().at(0);
+            rsp_stream_store[tid].push_back(token);
         }
         auto end = system_clock::now();
 
@@ -65,7 +74,9 @@ public:
         std::cout << "------------------------------" << std::endl;
 
         for (auto rsp : rsp_stream_store) {
-            std::cout << rsp.second << std::endl;
+            std::string rsp_str;
+            tokenizer.Decode(rsp.second.data(), rsp.second.size(), &rsp_str);
+            std::cout << rsp_str << std::endl;
             std::cout << "--------------------" << std::endl;
         }
 
@@ -91,12 +102,22 @@ private:
 };
 
 int main(int argc, char** argv) {
-    if (argc < 2) {
-        std::cerr << "usage: " << argv[0] << " host:port" << std::endl;
+    if (argc < 3) {
+        std::cerr << "usage: " << argv[0] << " host:port tokenizer_path" << std::endl;
         return -1;
     }
 
     const std::string target_str = argv[1];
+    const std::string tokenizer_path = argv[2];
+    sentencepiece::SentencePieceProcessor tokenizer;
+    const auto tokenizer_status = tokenizer.Load(tokenizer_path);
+    if (!tokenizer_status.ok()) {
+        std::cerr << "[ERROR]" << tokenizer_status.ToString() << std::endl;
+        return -1;
+    }
+    std::cout << "VOCAB_SIZE: " << tokenizer.GetPieceSize() << "; BOS ID: " << tokenizer.bos_id()
+              << "; EOS ID: " << tokenizer.eos_id() << "; PAD ID: " << tokenizer.pad_id() << std::endl;
+
 
     GenerationClient generator(grpc::CreateChannel(target_str, grpc::InsecureChannelCredentials()));
 
@@ -111,6 +132,6 @@ int main(int argc, char** argv) {
         std::cout << str << std::endl;
     }
 
-    generator.Generation(prompts);
+    generator.Generation(prompts, tokenizer);
     return 0;
 }

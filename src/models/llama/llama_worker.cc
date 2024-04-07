@@ -120,7 +120,11 @@ public:
             uint64_t tid = tid_gen_token.tid;
             int token = tid_gen_token.token;
             Response rsp;
-            tokenizer_->Decode(&token, 1, &rsp.generated);
+            if (tid_gen_token.is_token_in_out) {
+                rsp.token = token;
+            } else {
+                tokenizer_->Decode(&token, 1, &rsp.generated);
+            }
             LLaMAWorker::UuidData udata;
             FindUData(uuid_data_, uuid_data_lock_, tid, &udata, false);
             if (udata.conn) {
@@ -528,6 +532,8 @@ static bool ParseRequest(const LlamaRequest& req, const RequestCheckResult& chec
     tid_ctrl.total_len = check_res.first_fill_len + check_res.rest_iters;
     tid_ctrl.cache_index = check_res.cache_index;
     tid_ctrl.next_tokens = req.token_id_list;
+    tid_ctrl.stop_tokens = req.stop_tokens;
+    tid_ctrl.is_token_in_out = req.is_token_in_out;
 
     worker_controller->tid_list.push_back(&tid_ctrl);
     worker_controller->start_pos.push_back(0);
@@ -584,7 +590,7 @@ void LLaMAWorker::DeleteTask(const vector<uint64_t>& finished_list,
         }
         auto& tid_ctrl = tid_it->second;
 
-        if (tid_ctrl.is_first_fill == false) { // avoid corner case generation_len = 0
+        if (tid_ctrl.is_first_fill == false) { // avoid corner case generation_len = 1
             --worker_controller_.decoding_batches;
         }
         // search deleted element
@@ -641,14 +647,14 @@ static void UpdateInput(const unordered_map<uint64_t, TidController>& tid_contro
     for (int i = 0; i < running_batch; ++i) {
         auto* tid_ctrl = worker_controller->tid_list[i];
 
-        worker_controller->token_inputs.insert(worker_controller->token_inputs.end(), tid_ctrl->next_tokens.begin(),
-                                               tid_ctrl->next_tokens.end());
-        worker_controller->seq_starts.push_back(worker_controller->seq_starts[i] + tid_ctrl->next_tokens.size());
+        worker_controller->token_inputs.insert(worker_controller->token_inputs.end(), tid_ctrl->next_tokens->begin(),
+                                               tid_ctrl->next_tokens->end());
+        worker_controller->seq_starts.push_back(worker_controller->seq_starts[i] + tid_ctrl->next_tokens->size());
         worker_controller->kv_starts.push_back(worker_controller->kv_starts[i] + tid_ctrl->first_fill_len +
                                                tid_ctrl->passed_iters);
 
         worker_controller->max_seq_len =
-            std::max<int64_t>(tid_ctrl->next_tokens.size(), worker_controller->max_seq_len);
+            std::max<int64_t>(tid_ctrl->next_tokens->size(), worker_controller->max_seq_len);
         worker_controller->max_kv_len =
             std::max<int64_t>(tid_ctrl->first_fill_len + tid_ctrl->passed_iters, worker_controller->max_kv_len);
     }
@@ -768,6 +774,7 @@ void LLaMAWorker::Work() {
     worker_controller_.Reset();
 
     unordered_map<uint64_t, TidController> tid_controllers;
+    std::vector<TidGenToken> tid_gen_token_list;
 
     int running_batch = 0;
     long long step = 0;
@@ -776,7 +783,7 @@ void LLaMAWorker::Work() {
     auto check_func = [this, &check_res, &cache_cool_down_count](const LlamaRequest& req) -> bool {
         check_res.cache_index = INT64_MAX;
         check_res.rest_iters = -1;
-        check_res.first_fill_len = req.token_id_list.size();
+        check_res.first_fill_len = req.token_id_list->size();
         if (check_res.max_tokens_per_step > worker_config_.max_tokens_per_step) {
             return false;
         }
@@ -890,12 +897,12 @@ void LLaMAWorker::Work() {
             utils::TimingGuard __timing__(&profiler.step_send_duration);
             decoder_thread_pool_.Wait();
 
-            tid_gen_token_list_.clear();
+            tid_gen_token_list.clear();
             for (int task_iter = 0; task_iter < running_batch; ++task_iter) {
                 auto* tid_ctrl = worker_controller_.tid_list[task_iter];
                 int gen_token = gen_tokens[task_iter];
                 LOG(DEBUG) << "task[" << tid_ctrl->tid << "] gen token: " << gen_token;
-                tid_ctrl->next_tokens = {gen_token};
+                tid_ctrl->next_tokens.reset(new vector<int>({gen_token}));
                 if (tid_ctrl->is_first_fill == true) {
                     worker_controller_.start_pos[task_iter] += tid_ctrl->first_fill_len;
                     tid_ctrl->is_first_fill = false;
@@ -907,12 +914,12 @@ void LLaMAWorker::Work() {
                 tid_ctrl->passed_iters++;
                 tid_ctrl->rest_iters--;
 
-                tid_gen_token_list_.emplace_back(tid_ctrl->tid, gen_token, false);
+                tid_gen_token_list.emplace_back(tid_ctrl->tid, gen_token, false, tid_ctrl->is_token_in_out);
                 // finished task
                 bool is_shutdown =
                     worker_controller_.tid_shutdown.find(tid_ctrl->tid) != worker_controller_.tid_shutdown.end();
-                if (tid_ctrl->rest_iters <= 0 || (tid_ctrl->early_stopping && tokenizer_->IsEosId(gen_token)) || is_shutdown) {
-                    tid_gen_token_list_.back().is_last = true;
+                if (tid_ctrl->rest_iters <= 0 || (tid_ctrl->early_stopping && tid_ctrl->stop_tokens->find(gen_token) != tid_ctrl->stop_tokens->end()) || is_shutdown) {
+                    tid_gen_token_list.back().is_last = true;
                     if (cache_cool_down_count > 0)
                         cache_cool_down_count--;
                     worker_controller_.tid_finished.push_back(tid_ctrl->tid);
@@ -920,14 +927,14 @@ void LLaMAWorker::Work() {
             }
             worker_controller_.tid_shutdown.clear();
 
-            decoder_thread_pool_.RunAsync([this](uint32_t nthr, uint32_t ithr) {
-                size_t task_size = tid_gen_token_list_.size();
+            decoder_thread_pool_.RunAsync([this, &tid_gen_token_list](uint32_t nthr, uint32_t ithr) {
+                size_t task_size = tid_gen_token_list.size();
                 uint32_t n_block = task_size % nthr == 0 ? task_size / nthr : task_size / nthr + 1;
                 uint32_t start_id = ithr * n_block;
                 uint32_t end_id = (ithr + 1) * n_block > task_size ? task_size : (ithr + 1) * n_block;
 
                 auto task =
-                    DecodeAndSendTask(start_id, end_id, tokenizer_, &uuid_data_, &uuid_data_lock_, &tid_gen_token_list_,
+                    DecodeAndSendTask(start_id, end_id, tokenizer_, &uuid_data_, &uuid_data_lock_, &tid_gen_token_list,
                                       &tid_shutdown_lock_, &worker_controller_.tid_shutdown);
                 task.Process();
             });
@@ -971,7 +978,17 @@ void LLaMAWorker::Process(const shared_ptr<Request>& req, Connection* conn) {
     lreq->uuid = uuid_seq_++;
     lreq->conn = conn;
     lreq->orig = req;
-    tokenizer_->Encode(req->prompt.data(), req->prompt.size(), &lreq->token_id_list);
+    if (!req->token_ids) {
+        lreq->token_id_list = std::make_shared<std::vector<int>>();
+        tokenizer_->Encode(req->prompt.data(), req->prompt.size(), lreq->token_id_list.get());
+        lreq->stop_tokens = std::make_shared<std::unordered_set<int>>();
+        lreq->stop_tokens->insert(tokenizer_->GetEosId());
+        lreq->is_token_in_out = false;
+    } else {
+        lreq->token_id_list = req->token_ids;
+        lreq->stop_tokens = req->stop_tokens;
+        lreq->is_token_in_out = true;
+    }
 
     pthread_mutex_lock(&uuid_data_lock_);
     uuid_data_.insert(make_pair(lreq->uuid, UuidData(req->id, conn)));

@@ -22,5 +22,13 @@ if(PPLNN_USE_LLM_CUDA)
         add_executable(client_qps_measure tools/client_qps_measure.cc tools/simple_flags.cc)
         target_link_libraries(client_qps_measure pplnn_static ppl_llm_grpc_proto_static grpc++ ppl_sentencepiece_static)
         target_include_directories(client_qps_measure PUBLIC ${HPCC_DEPS_DIR}/rapidjson/include)
+
+        add_executable(client_sample_token_in_out tools/client_sample_token_in_out.cc)
+        target_link_libraries(client_sample_token_in_out ppl_llm_grpc_proto_static grpc++ ppl_sentencepiece_static)
+
+        add_executable(client_qps_measure_token_in_out tools/client_qps_measure_token_in_out.cc tools/simple_flags.cc)
+        target_link_libraries(client_qps_measure_token_in_out pplnn_static ppl_llm_grpc_proto_static grpc++)
+        target_include_directories(client_qps_measure_token_in_out PUBLIC ${HPCC_DEPS_DIR}/rapidjson/include)
+
     endif()
 endif()
