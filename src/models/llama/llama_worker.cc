@@ -115,6 +115,7 @@ public:
         if (start_id_ >= tid_gen_token_list_->size()) {
             return RC_SUCCESS;
         }
+        map<Connection*, std::vector<Response>> c2r;
         for (uint32_t i = start_id_; i < end_id_; ++i) {
             const auto& tid_gen_token = tid_gen_token_list_->at(i);
             uint64_t tid = tid_gen_token.tid;
@@ -130,7 +131,7 @@ public:
             if (udata.conn) {
                 rsp.id = udata.req_id;
                 rsp.flag = tid_gen_token.is_last == true ? Response::IS_LAST : Response::NORMAL;
-                udata.conn->Send(rsp);
+                c2r[udata.conn].push_back(rsp);
             } else {
                 if (!tid_gen_token.is_last) {
                     pthread_mutex_lock(tid_shutdown_lock_);
@@ -138,6 +139,9 @@ public:
                     pthread_mutex_unlock(tid_shutdown_lock_);
                 }
             }
+        }
+        for (auto iter: c2r) {
+            iter.first->Send(iter.second); 
         }
         return RC_SUCCESS;
     }

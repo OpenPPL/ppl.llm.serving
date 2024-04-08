@@ -3,7 +3,7 @@ syntax = "proto3";
 package ppl.llm.proto;
 
 service LLMService {
-    rpc Generation (BatchedRequest) returns (stream Response) {}
+    rpc Generation (BatchedRequest) returns (stream BatchedResponse) {}
 }
 
 message Tokens {
@@ -44,4 +44,8 @@ message Response {
     uint64 id = 2;
     string generated = 3;
     Tokens tokens = 4;
+}
+
+message BatchedResponse {
+    repeated Response rsp = 1;
 }

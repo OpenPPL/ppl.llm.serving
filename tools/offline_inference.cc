@@ -59,12 +59,15 @@ public:
         pthread_mutex_destroy(&finish_lock_);
     }
 
-    void Send(const Response& rsp) override {
-        auto& rsp_str = tid_rsp_map_->emplace(rsp.id, std::string()).first->second;
-        rsp_str += rsp.generated;
-        if (rsp.flag == Response::IS_LAST) {
-            ++count_;
+    void Send(const std::vector<Response>& batched_rsp) override {
+        for (const auto& rsp : batched_rsp) {
+            auto& rsp_str = tid_rsp_map_->emplace(rsp.id, std::string()).first->second;
+            rsp_str += rsp.generated;
+            if (rsp.flag == Response::IS_LAST) {
+                ++count_;
+            }
         }
+
         if (count_ >= wanted_) {
             pthread_cond_signal(&finish_signal_);
         }

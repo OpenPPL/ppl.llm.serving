@@ -37,7 +37,7 @@ struct GRPCConnection final : public Connection {
         pthread_mutex_destroy(&send_lock);
     }
 
-    void Send(const Response&) override;
+    void Send(const std::vector<Response>&) override;
     void NotifyFailure(uint64_t) override;
 
     enum {
@@ -50,41 +50,46 @@ struct GRPCConnection final : public Connection {
 
     pthread_mutex_t send_lock;
     int nr_finished_req = 0;
-    std::list<proto::Response> send_queue;
-    ServerAsyncWriter<proto::Response> writer;
+    std::list<proto::BatchedResponse> send_queue;
+    ServerAsyncWriter<proto::BatchedResponse> writer;
 };
 
-static void SendOneRes(proto::Response&& pb_res, uint32_t nr_finished_req, GRPCConnection* event) {
+static void SendBatchRes(proto::BatchedResponse&& pb_batch_res, uint32_t nr_finished_req, GRPCConnection* event) {
     pthread_mutex_lock(&event->send_lock);
     event->nr_finished_req += nr_finished_req;
-    event->send_queue.emplace_back(std::move(pb_res));
+    event->send_queue.emplace_back(std::move(pb_batch_res));
     if (event->send_queue.size() == 1) {
         event->writer.Write(event->send_queue.front(), event);
     }
     pthread_mutex_unlock(&event->send_lock);
 }
 
-void GRPCConnection::Send(const Response& res) {
-    bool is_last = (res.flag == Response::IS_LAST);
-
-    proto::Response pb_res;
-    pb_res.set_status(is_last ? proto::FINISHED : proto::PROCESSING);
-    pb_res.set_id(res.id);
-
-    if (!res.generated.empty()) {
-        pb_res.set_generated(res.generated);
-    } else {
-        auto* tokens = pb_res.mutable_tokens();
-        tokens->add_ids(res.token);
+void GRPCConnection::Send(const std::vector<Response>& res_list) {
+    proto::BatchedResponse pb_batch_res;
+    uint32_t finished_cnt = 0;
+    for (auto& res: res_list) {
+        bool is_last = (res.flag == Response::IS_LAST);
+        auto* pb_res = pb_batch_res.add_rsp();
+        pb_res->set_status(is_last ? proto::FINISHED : proto::PROCESSING);
+        pb_res->set_id(res.id);
+        if (!res.generated.empty()) {
+            pb_res->set_generated(res.generated);
+        } else {
+            auto* tokens = pb_res->mutable_tokens();
+            tokens->add_ids(res.token);
+        }
+        finished_cnt += is_last;
     }
-    SendOneRes(std::move(pb_res), is_last, this);
+    // SendOneRes(std::move(pb_batch_res), finished_cnt, this);
+    SendBatchRes(std::move(pb_batch_res), finished_cnt, this);  
 }
 
 void GRPCConnection::NotifyFailure(uint64_t id) {
-    proto::Response pb_res;
-    pb_res.set_status(proto::FAILED);
-    pb_res.set_id(id);
-    SendOneRes(std::move(pb_res), 1, this);
+    proto::BatchedResponse pb_batch_res;
+    auto* pb_res = pb_batch_res.add_rsp();
+    pb_res->set_status(proto::FAILED);
+    pb_res->set_id(id);
+    SendBatchRes(std::move(pb_batch_res), 1, this);
 }
 
 /* ------------------------------------------------------------------------- */

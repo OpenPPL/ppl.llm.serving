@@ -50,8 +50,8 @@ static int g_finished_cnt = 0;
 static int g_num_request = 0;
 static std::unordered_map<int64_t, TidRecord> g_tid_record_map;
 
-void SampleRequest(const std::string& dataset_path, const sentencepiece::SentencePieceProcessor& tokenizer,
-                   std::vector<std::shared_ptr<proto::BatchedRequest>>* req_list, bool early_stopping) {
+void SampleRequest(const std::string& dataset_path, const sentencepiece::SentencePieceProcessor& tokenizer, 
+                bool early_stopping, std::vector<std::shared_ptr<proto::BatchedRequest>>* req_list) {
     std::ifstream ifs(dataset_path);
     rapidjson::IStreamWrapper isw(ifs);
     rapidjson::Document root;
@@ -167,21 +167,23 @@ private:
                     break;
                 case PROCESS:
                     if (responseStatus) {
-                        auto& rsp = this->reply;
-                        int tid = rsp.id();
-                        if (g_tid_record_map[tid].is_prefill == true) {
-                            g_tid_record_map[tid].prefill_time = std::chrono::high_resolution_clock::now();
-                            g_tid_record_map[tid].is_prefill = false;
-                            g_tid_record_map[tid].prev_time = g_tid_record_map[tid].prefill_time;
-                        } else {
-                            auto cur_time = std::chrono::high_resolution_clock::now();
-                            double step_latency = std::chrono::duration_cast<std::chrono::microseconds>(cur_time - g_tid_record_map[tid].prev_time).count() / 1000.0; // ms
-                            g_decode_latecy_list.push_back(step_latency);
+                        const auto& batched_rsp = this->reply;
+                        for (const auto& rsp : batched_rsp.rsp()) {
+                            int tid = rsp.id();
+                            if (g_tid_record_map[tid].is_prefill == true) {
+                                g_tid_record_map[tid].prefill_time = std::chrono::high_resolution_clock::now();
+                                g_tid_record_map[tid].is_prefill = false;
+                                g_tid_record_map[tid].prev_time = g_tid_record_map[tid].prefill_time;
+                            } else {
+                                auto cur_time = std::chrono::high_resolution_clock::now();
+                                double step_latency = std::chrono::duration_cast<std::chrono::microseconds>(cur_time - g_tid_record_map[tid].prev_time).count() / 1000.0; // ms
+                                g_decode_latecy_list.push_back(step_latency);
+                            }
+                            const std::string& rsp_stream = rsp.generated();
+                            g_rsp_stream_store[tid] += rsp_stream;
+                            g_tid_record_map[tid].real_output_len += 1;
+                            response_reader->Read(&reply, (void*)this);
                         }
-                        const std::string& rsp_stream = rsp.generated();
-                        g_rsp_stream_store[tid] += rsp_stream;
-                        g_tid_record_map[tid].real_output_len += 1;
-                        response_reader->Read(&reply, (void*)this);
                     } else {
                         response_reader->Finish(&status, (void*)this);
                         callStatus_ = FINISH;
@@ -189,10 +191,12 @@ private:
                     break;
                 case FINISH:
                     __sync_fetch_and_add(&g_finished_cnt, 1);
-                    g_tid_record_map[reply.id()].finished_time = std::chrono::high_resolution_clock::now();
-                    LOG(INFO) << "Finish: " << g_finished_cnt << "/" << g_num_request;
                     if (status.ok()) {
-                        LOG(INFO) << "Server Response Completed: " << reply.id();
+                        for (const auto& rsp : this->reply.rsp()) {
+                            g_tid_record_map[rsp.id()].finished_time = std::chrono::high_resolution_clock::now();
+                            LOG(INFO) << "Finish: " << g_finished_cnt << "/" << g_num_request;
+                            LOG(INFO) << "Server Response Completed: " << rsp.id();
+                        }                        
                     } else {
                         LOG(ERROR) << "RPC failed";
                     }
@@ -205,10 +209,10 @@ private:
         };
 
         CallStatus callStatus_ = CREATE;
-        proto::Response reply;
+        proto::BatchedResponse reply;
         ClientContext context;
         Status status;
-        std::unique_ptr<ClientAsyncReader<proto::Response>> response_reader;
+        std::unique_ptr<ClientAsyncReader<proto::BatchedResponse>> response_reader;
     };
 
     std::unique_ptr<proto::LLMService::Stub> stub_;
@@ -245,7 +249,7 @@ int main(int argc, char* argv[]) {
               << "; EOS ID: " << tokenizer.eos_id() << "; PAD ID: " << tokenizer.pad_id();
 
     std::vector<std::shared_ptr<proto::BatchedRequest>> req_list;
-    SampleRequest(data_path, tokenizer, &req_list, g_flag_early_stopping);
+    SampleRequest(data_path, tokenizer, g_flag_early_stopping, &req_list);
     g_num_request = req_list.size();
 
     GenerationClientAsync generator(grpc::CreateChannel(target_str, grpc::InsecureChannelCredentials()));
