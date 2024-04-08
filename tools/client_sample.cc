@@ -40,23 +40,24 @@ public:
             rsp_stream_store[i] = "";
         }
         // response
-        proto::Response rsp;
-        std::unique_ptr<ClientReader<proto::Response> > reader(stub_->Generation(&context, req_list));
+        proto::BatchedResponse batched_rsp;
+        std::unique_ptr<ClientReader<proto::BatchedResponse>> reader(stub_->Generation(&context, req_list));
 
         // stream chat
         auto start = system_clock::now();
         auto first_fill_time = system_clock::now();
         bool is_first_fill = true;
 
-        while (reader->Read(&rsp)) {
+        while (reader->Read(&batched_rsp)) {
             if (is_first_fill) {
                 first_fill_time = system_clock::now();
                 is_first_fill = false;
             }
-
-            int tid = rsp.id();
-            std::string rsp_stream = rsp.generated();
-            rsp_stream_store[tid] += rsp_stream;
+            for (const auto& rsp : batched_rsp.rsp()) {
+                int tid = rsp.id();
+                std::string rsp_stream = rsp.generated();
+                rsp_stream_store[tid] += rsp_stream;
+            }
         }
         auto end = system_clock::now();
 

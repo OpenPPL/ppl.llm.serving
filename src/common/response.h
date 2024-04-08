@@ -30,7 +30,7 @@ struct Response final {
     } flag;
     uint64_t id;
     std::string generated;
-    int token = -1;
+    int token;
 };
 
 }} // namespace ppl::llm

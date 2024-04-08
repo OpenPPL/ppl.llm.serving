@@ -37,7 +37,6 @@ struct Request final {
     bool early_stopping;
     std::shared_ptr<std::vector<int>> token_ids;
     std::shared_ptr<std::unordered_set<int>> stop_tokens;
-    
 };
 
 }} // namespace ppl::llm
