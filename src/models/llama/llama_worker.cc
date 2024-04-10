@@ -140,7 +140,7 @@ public:
                 }
             }
         }
-        for (auto iter: c2r) {
+        for (auto& iter : c2r) {
             iter.first->Send(iter.second); 
         }
         return RC_SUCCESS;
