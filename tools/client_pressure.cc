@@ -336,24 +336,28 @@ public:
             req_queue.clear();
 
             ClientContext context;
-            std::unique_ptr<ClientReader<proto::Response> > reader(stub_->Generation(&context, req_list));
+            std::unique_ptr<ClientReader<proto::BatchedResponse>> reader(stub_->Generation(&context, req_list));
 
-            proto::Response rsp;
-            while (reader->Read(&rsp)) {
-                int tid = rsp.id();
-                if (rsp.status() == proto::FAILED) {
-                    std::cout << "failed tid: " << tid << std::endl;
-                    req_queue.push_back(tid_map.find(tid)->second);
-                    continue;
+            proto::BatchedResponse batched_rsp;
+            while (reader->Read(&batched_rsp)) {
+                for (const auto& rsp : batched_rsp.rsp()) {
+                    int tid = rsp.id();
+                    if (rsp.status() == proto::FAILED) {
+                        std::cout << "failed tid: " << tid << std::endl;
+                        req_queue.push_back(tid_map.find(tid)->second);
+                        continue;
+                    }
+
+                    if (rsp.status() == proto::FINISHED) {
+                        finished_cnt++;
+                    }
+
+                    std::string rsp_stream = rsp.generated();
+                    // std::cout << rsp_stream  << std::endl;
+                    rsp_stream_store[tid] += rsp_stream;
                 }
 
-                if (rsp.status() == proto::FINISHED) {
-                    finished_cnt++;
-                }
 
-                std::string rsp_stream = rsp.generated();
-                // std::cout << rsp_stream  << std::endl;
-                rsp_stream_store[tid] += rsp_stream;
             }
             Status status = reader->Finish();
             if (status.ok()) {

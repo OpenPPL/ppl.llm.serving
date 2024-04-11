@@ -1,14 +1,13 @@
+#include "llm.grpc.pb.h"
+
+#include "absl/flags/flag.h"
+#include "absl/flags/parse.h"
+#include "grpc++/grpc++.h"
+
 #include <iostream>
 #include <memory>
 #include <string>
 #include <unordered_map>
-
-#include "absl/flags/flag.h"
-#include "absl/flags/parse.h"
-#include "llm.grpc.pb.h"
-#include "sentencepiece_processor.h"
-
-#include <grpc++/grpc++.h>
 #include <chrono>
 
 using namespace grpc;
@@ -24,19 +23,16 @@ class GenerationClient {
 public:
     GenerationClient(std::shared_ptr<Channel> channel) : stub_(proto::LLMService::NewStub(channel)) {}
 
-    int Generation(const std::vector<std::string>& prompts, const sentencepiece::SentencePieceProcessor& tokenizer) {
+    int Generation(const std::vector<std::vector<int>>& batch_prompt_token_ids) {
         // Data we are sending to the server.
         ClientContext context;
         proto::BatchedRequest req_list;
         std::unordered_map<int, std::vector<int>> rsp_stream_store;
-        for (size_t i = 0; i < prompts.size(); i++) {
+        for (size_t i = 0; i < batch_prompt_token_ids.size(); i++) {
+            const auto& prompt_token_ids = batch_prompt_token_ids[i];
             // request
             auto req = req_list.add_req();
             req->set_id(i);
-
-            std::vector<int> prompt_token_ids;
-            tokenizer.Encode(prompts[i], &prompt_token_ids);
-
             auto* pb_tokens = req->mutable_tokens();
             for (auto token : prompt_token_ids) {
                 pb_tokens->add_ids(token);
@@ -74,10 +70,11 @@ public:
         std::cout << "--------- Answer -------------" << std::endl;
         std::cout << "------------------------------" << std::endl;
 
-        for (auto rsp : rsp_stream_store) {
-            std::string rsp_str;
-            tokenizer.Decode(rsp.second.data(), rsp.second.size(), &rsp_str);
-            std::cout << rsp_str << std::endl;
+        for (const auto rsp : rsp_stream_store) {
+            for (const auto token : rsp.second) {
+                std::cout << token << ", ";
+            }
+            std::cout << std::endl;
             std::cout << "--------------------" << std::endl;
         }
 
@@ -103,36 +100,28 @@ private:
 };
 
 int main(int argc, char** argv) {
-    if (argc < 3) {
-        std::cerr << "usage: " << argv[0] << " host:port tokenizer_path" << std::endl;
+    if (argc < 2) {
+        std::cerr << "usage: " << argv[0] << " host:port" << std::endl;
         return -1;
     }
-
     const std::string target_str = argv[1];
-    const std::string tokenizer_path = argv[2];
-    sentencepiece::SentencePieceProcessor tokenizer;
-    const auto tokenizer_status = tokenizer.Load(tokenizer_path);
-    if (!tokenizer_status.ok()) {
-        std::cerr << "[ERROR]" << tokenizer_status.ToString() << std::endl;
-        return -1;
-    }
-    std::cout << "VOCAB_SIZE: " << tokenizer.GetPieceSize() << "; BOS ID: " << tokenizer.bos_id()
-              << "; EOS ID: " << tokenizer.eos_id() << "; PAD ID: " << tokenizer.pad_id() << std::endl;
-
 
     GenerationClient generator(grpc::CreateChannel(target_str, grpc::InsecureChannelCredentials()));
 
-    std::string prompt = "Building a website can be done in 10 simple steps:\n";
-    const std::vector<std::string> prompts = {3, prompt};
+    std::vector<int> token_ids = {0, 1, 2, 3, 4, 5, 6, 7};
+    const std::vector<std::vector<int>> prompt_token_ids = {3, token_ids};
 
     std::cout << "------------------------------" << std::endl;
     std::cout << "--------- Question -------------" << std::endl;
     std::cout << "------------------------------" << std::endl;
 
-    for (auto& str : prompts) {
-        std::cout << str << std::endl;
+    for (auto& token_ids : prompt_token_ids) {
+        for (int token : token_ids) {
+            std::cout << token << ", ";
+        }
+        std::cout << std::endl;
     }
 
-    generator.Generation(prompts, tokenizer);
+    generator.Generation(prompt_token_ids);
     return 0;
 }
