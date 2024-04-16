@@ -79,9 +79,9 @@ hpcc_declare_git_dep(grpc
 set(PPLNN_BUILD_TESTS OFF CACHE BOOL "")
 set(PPLNN_BUILD_SAMPLES OFF CACHE BOOL "")
 
-hpcc_declare_git_dep(
-    ppl.nn.llm
-    https://github.com/openppl-public/ppl.nn.llm.git
+hpcc_declare_git_dep_depth1(
+    pplnn
+    https://github.com/openppl-public/ppl.nn.git
     master)
 
 # --------------------------------------------------------------------------- #

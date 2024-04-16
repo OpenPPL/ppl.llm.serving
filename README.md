@@ -4,11 +4,11 @@
 
 `ppl.llm.serving` is a part of `PPL.LLM` system.
 
-![SYSTEM_OVERVIEW](https://github.com/openppl-public/ppl.nn.llm/blob/master/docs/system_overview.png)
+![SYSTEM_OVERVIEW](https://github.com/openppl-public/ppl.nn/blob/master/docs/images/llm-system-overview.png)
 
-**We recommend users who are new to this project to read the [Overview of system](https://github.com/openppl-public/ppl.nn.llm/blob/master/docs/system_overview.md).**
+**We recommend users who are new to this project to read the [Overview of system](https://github.com/openppl-public/ppl.nn/blob/master/docs/en/llm-system-overview.md).**
 
-`ppl.llm.serving` is a serving based on [ppl.nn.llm](https://github.com/openppl-public/ppl.nn.llm) for various Large Language Models(LLMs). This repository contains a server based on gRPC and inference support for [LLaMA](https://github.com/facebookresearch/llama).
+`ppl.llm.serving` is a serving based on [ppl.nn](https://github.com/openppl-public/ppl.nn) for various Large Language Models(LLMs). This repository contains a server based on gRPC and inference support for [LLaMA](https://github.com/facebookresearch/llama).
 
 ## Prerequisites
 
@@ -72,8 +72,8 @@ Here is a brief tutorial, refer to [LLaMA Guide](docs/llama_guide.md) for more d
     ```
     See [tools/client_qps_measure.cc](tools/client_qps_measure.cc) for more details. `--request_rate` is the number of request per second, and value `inf` means send all client request with no interval.
 
-* Running inference offline: 
-    
+* Running inference offline:
+
     ```bash
     ./ppl-build/offline_inference /path/to/server/config.json
     ```

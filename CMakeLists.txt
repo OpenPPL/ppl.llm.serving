@@ -71,7 +71,7 @@ endif()
 
 # pplnn after serving, depends on libprotobuf provided by grpc
 set(PPLNN_BUILD_TOOLS OFF)
-hpcc_populate_dep(ppl.nn.llm)
+hpcc_populate_dep(pplnn)
 
 # --------------------------------------------------------------------------- #
 
