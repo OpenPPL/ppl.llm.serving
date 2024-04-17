@@ -328,11 +328,22 @@ int main(int argc, char* argv[]) {
         prompt_latency_list[g_num_request / 2], prompt_latency_list[g_num_request * 3 / 4], prompt_latency_list[g_num_request * 8 / 10],
         prompt_latency_list[g_num_request * 9 / 10], prompt_latency_list[g_num_request * 95 / 100], prompt_latency_list[g_num_request * 99 / 100], prompt_latency_list[g_num_request - 1]);
 
-    fprintf(stdout, "CSV format header:total_latency,qps,avg_latency,min,1%%,10%%,25%%,50%%,75%%,80%%,90%%,95%%,99%%,max");
-    fprintf(stdout, "CSV format output: %.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f", benchmark_time, g_num_request / benchmark_time, avg_latency_per_prompt, 
-        g_decode_latecy_list[0], g_decode_latecy_list[g_num_request / 100], g_decode_latecy_list[g_num_request / 10], g_decode_latecy_list[g_num_request / 4],
-        g_decode_latecy_list[g_num_request / 2], g_decode_latecy_list[g_num_request * 3 / 4], g_decode_latecy_list[g_num_request * 8 / 10],
-        g_decode_latecy_list[g_num_request * 9 / 10], g_decode_latecy_list[g_num_request * 95 / 100], g_decode_latecy_list[g_num_request * 99 / 100], g_decode_latecy_list[g_num_request - 1]);
+    int _3s_position = 0;
+    for (size_t i = 0; i < prompt_latency_list.size(); ++i) {
+        if (prompt_latency_list[i] > 3000) {
+            _3s_position = i;
+            break;
+        }
+        _3s_position = prompt_latency_list.size();
+    }
+
+    fprintf(stdout, "CSV format header:avg_input_len,avg_output_len,out_tps,in_out_tps,qps,total_latency(s),avg_latency(ms),min(ms),1%%(ms),10%%(ms),25%%(ms),50%%(ms),75%%(ms),80%%(ms),90%%(ms),95%%(ms),99%%(ms),max(ms),3s(%%)");
+    fprintf(stdout, "CSV format output:%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f", 
+        (float)total_input_tokens / g_num_request, (float)total_gen_tokens / g_num_request, total_gen_tokens / benchmark_time, (total_input_tokens + total_gen_tokens) /  benchmark_time, 
+        g_num_request / benchmark_time, benchmark_time, avg_latency_per_prompt, 
+        prompt_latency_list[0], prompt_latency_list[g_num_request / 100], prompt_latency_list[g_num_request / 10], prompt_latency_list[g_num_request / 4],
+        prompt_latency_list[g_num_request / 2], prompt_latency_list[g_num_request * 3 / 4], prompt_latency_list[g_num_request * 8 / 10],
+        prompt_latency_list[g_num_request * 9 / 10], prompt_latency_list[g_num_request * 95 / 100], prompt_latency_list[g_num_request * 99 / 100], prompt_latency_list[g_num_request - 1], (float)_3s_position / prompt_latency_list.size() * 100);
 
     recv_thread.join();
     return 0;
