@@ -18,7 +18,7 @@
 #include "models/config.h"
 #include "models/resource.h"
 #include "models/factory.h"
-#include "serving/grpc_server.h"
+#include "serving/grpc/grpc_server.h"
 #include "backends/cuda/sampler.h"
 #include "backends/cuda/resource_manager.h"
 #include "common/processor.h"
