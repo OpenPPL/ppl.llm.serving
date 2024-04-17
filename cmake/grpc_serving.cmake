@@ -1,7 +1,7 @@
 set(__LLM_SERVING_GENERATED_DIR__ "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY ${__LLM_SERVING_GENERATED_DIR__})
 
-set(__PROTO_DIR__ ${PROJECT_SOURCE_DIR}/src/serving/proto)
+set(__PROTO_DIR__ ${PROJECT_SOURCE_DIR}/src/serving/grpc/proto)
 set(PROTOC_EXECUTABLE "${CMAKE_CURRENT_BINARY_DIR}/grpc-build/third_party/protobuf/protoc")
 
 # ----- cannot disable zlib tests and examples ----- #
@@ -40,7 +40,7 @@ target_include_directories(ppl_llm_grpc_proto_static PUBLIC
 
 # ----- #
 
-file(GLOB __SRC__ src/serving/*.cc)
+file(GLOB __SRC__ src/serving/grpc/*.cc)
 add_library(ppl_llm_grpc_serving_static STATIC ${__SRC__})
 target_link_libraries(ppl_llm_grpc_serving_static PUBLIC ppl_llm_grpc_proto_static grpc++ pplcommon_static pthread)
 target_include_directories(ppl_llm_grpc_serving_static PUBLIC src)
