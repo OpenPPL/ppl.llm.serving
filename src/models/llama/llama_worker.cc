@@ -425,8 +425,10 @@ LLaMAWorker::LLaMAWorker(const Resource& resource, const ModelConfig& mconfig, c
 
 LLaMAWorker::~LLaMAWorker() {
     if (worker_thread_active_) {
+        pthread_mutex_lock(sched_.GetQueueLock()); // to ensure that workers are waiting for status changing
         worker_thread_active_ = false;
         pthread_cond_signal(&req_signal_);
+        pthread_mutex_unlock(sched_.GetQueueLock());
         pthread_join(worker_thread_, nullptr);
     }
 
