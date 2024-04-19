@@ -15,12 +15,12 @@ if(NOT PPL_LLM_SENTENCEPIECE_PROTOBUF_LIBS)
     set(__PROTO_DIR__ ${__SENTENCEPIECE_ROOT_DIR__}/src)
     add_custom_command(
         OUTPUT ${__SP_GENERATED_FILES__}
-        COMMAND ${PPL_LLM_PROTOC_EXECUTABLE}
+        COMMAND ${PPLNN_PROTOC_EXECUTABLE}
         ARGS --cpp_out "${__PPL_LLAMA_GENERATED_DIR__}" -I "${__PROTO_DIR__}" "${__PROTO_DIR__}/sentencepiece.proto"
         DEPENDS protoc)
     add_custom_command(
         OUTPUT ${__SPM_GENERATED_FILES__}
-        COMMAND ${PPL_LLM_PROTOC_EXECUTABLE}
+        COMMAND ${PPLNN_PROTOC_EXECUTABLE}
         ARGS --cpp_out "${__PPL_LLAMA_GENERATED_DIR__}" -I "${__PROTO_DIR__}" "${__PROTO_DIR__}/sentencepiece_model.proto"
         DEPENDS protoc)
     unset(__PROTO_DIR__)

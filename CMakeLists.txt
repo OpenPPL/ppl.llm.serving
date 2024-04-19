@@ -34,14 +34,14 @@ if(PPL_LLM_ENABLE_GRPC_SERVING)
     execute_process(COMMAND ${GIT_EXECUTABLE} checkout ${PPL_LLM_PROTOBUF_VERSION}
         WORKING_DIRECTORY ${grpc_SOURCE_DIR}/third_party/protobuf)
 
-    set(PPL_LLM_PROTOC_EXECUTABLE ${grpc_BINARY_DIR}/third_party/protobuf/protoc)
+    set(PPLNN_PROTOC_EXECUTABLE ${grpc_BINARY_DIR}/third_party/protobuf/protoc)
 elseif(PPL_LLM_ENABLE_LLAMA)
     # use specified protobuf version for c++17
     hpcc_declare_git_dep(protobuf
         https://github.com/protocolbuffers/protobuf.git
         ${PPL_LLM_PROTOBUF_VERSION})
     hpcc_populate_dep(protobuf)
-    set(PPL_LLM_PROTOC_EXECUTABLE ${protobuf_BINARY_DIR}/protoc)
+    set(PPLNN_PROTOC_EXECUTABLE ${protobuf_BINARY_DIR}/protoc)
 endif()
 
 # --------------------------------------------------------------------------- #
@@ -55,7 +55,7 @@ if(TARGET libprotobuf)
     set(__ONNX_GENERATED_FILES__ "${__LLM_GENERATED_DIR__}/onnx.pb.h;${__LLM_GENERATED_DIR__}/onnx.pb.cc")
     add_custom_command(
         OUTPUT ${__ONNX_GENERATED_FILES__}
-        COMMAND ${PPL_LLM_PROTOC_EXECUTABLE}
+        COMMAND ${PPLNN_PROTOC_EXECUTABLE}
         ARGS --cpp_out ${__LLM_GENERATED_DIR__} -I ${__PROTO_DIR__}
         ${__PROTO_DIR__}/onnx.proto
         DEPENDS protoc ${__PROTO_DIR__}/onnx.proto)
