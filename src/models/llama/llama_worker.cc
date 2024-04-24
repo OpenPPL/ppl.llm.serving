@@ -127,10 +127,10 @@ public:
                 tokenizer_->Decode(&token, 1, &rsp.generated);
             }
             LLaMAWorker::UuidData udata;
-            FindUData(uuid_data_, uuid_data_lock_, tid, &udata, false);
+            FindUData(uuid_data_, uuid_data_lock_, tid, &udata, tid_gen_token.is_last);
             if (udata.conn) {
                 rsp.id = udata.req_id;
-                rsp.flag = tid_gen_token.is_last == true ? Response::IS_LAST : Response::NORMAL;
+                rsp.flag = tid_gen_token.is_last ? Response::IS_LAST : Response::NORMAL;
                 c2r[udata.conn].push_back(rsp);
             } else {
                 if (!tid_gen_token.is_last) {
@@ -141,7 +141,7 @@ public:
             }
         }
         for (auto& iter : c2r) {
-            iter.first->Send(iter.second); 
+            iter.first->Send(iter.second);
         }
         return RC_SUCCESS;
     }
