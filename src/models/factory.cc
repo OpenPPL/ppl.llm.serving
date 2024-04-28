@@ -30,9 +30,10 @@ using namespace ppl::common;
 namespace ppl { namespace llm {
 
 RequestProcessor* ModelFactory::Create(const std::string& model_type, const Resource& resource,
-                                       const ModelConfig& mconfig, const WorkerConfig& wconfig) {
+                                       const ModelConfig& mconfig, const WorkerConfig& wconfig,
+                                       Connection* c) {
     if (model_type == "llama" || model_type == "baichuan" || model_type == "internlm") {
-        auto* llama_worker = new llama::LLaMAWorker(resource, mconfig, wconfig);
+        auto* llama_worker = new llama::LLaMAWorker(resource, mconfig, wconfig, c);
         auto rc = llama_worker->Init();
         if (rc != RC_SUCCESS) {
             LOG(ERROR) << "llama_worker init failed: " << GetRetCodeStr(rc);

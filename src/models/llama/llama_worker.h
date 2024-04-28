@@ -122,8 +122,6 @@ struct WorkerThreadArg final {
 };
 
 struct LlamaRequest final {
-    uint64_t uuid;
-    Connection* conn;
     std::shared_ptr<Request> orig;
     std::shared_ptr<std::vector<int>> token_id_list;
     std::shared_ptr<std::unordered_set<int>> stop_tokens;
@@ -138,14 +136,15 @@ public:
         Connection* conn;
     };
 
-    LLaMAWorker(const Resource& resource, const ModelConfig& mconfig, const WorkerConfig& wconfig);
+    LLaMAWorker(const Resource& resource, const ModelConfig& mconfig, const WorkerConfig& wconfig,
+                Connection*);
 
     ~LLaMAWorker();
 
     ppl::common::RetCode Init();
-    void ClearTask(Connection*) override;
+    void ClearTask(uint64_t) override;
 
-    void Process(const std::shared_ptr<Request>&, Connection*) override;
+    void Process(const std::shared_ptr<Request>&) override;
 
 private:
     ppl::common::RetCode CheckParameters() const;
@@ -184,10 +183,6 @@ private:
     pthread_cond_t req_signal_;
 
     utils::QueueRequestScheduler<LlamaRequest> sched_;
-    pthread_mutex_t uuid_data_lock_;
-    std::unordered_map<uint64_t, UuidData> uuid_data_;
-    std::unordered_map<Connection*, std::vector<uint64_t>> conn2uuid_;
-    uint64_t uuid_seq_ = 0;
 
 private:
     static constexpr int DECODER_THREAD_NUM = 2;

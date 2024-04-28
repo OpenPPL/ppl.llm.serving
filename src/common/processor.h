@@ -27,9 +27,13 @@ namespace ppl { namespace llm {
 
 class RequestProcessor {
 public:
+    RequestProcessor(Connection* c) : conn_(c) {}
     virtual ~RequestProcessor() {}
-    virtual void Process(const std::shared_ptr<Request>&, Connection*) = 0;
-    virtual void ClearTask(Connection* conn) = 0;
+    virtual void Process(const std::shared_ptr<Request>&) = 0;
+    virtual void ClearTask(uint64_t) = 0;
+
+protected:
+    Connection* conn_;
 };
 
 }} // namespace ppl::llm

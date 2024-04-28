@@ -30,7 +30,7 @@ namespace ppl { namespace llm {
 class ModelFactory final {
 public:
     static RequestProcessor* Create(const std::string& model_type, const Resource& resource, const ModelConfig& mconfig,
-                                    const WorkerConfig& wconfig);
+                                    const WorkerConfig& wconfig, Connection*);
 };
 
 class TokenizerFactory final {

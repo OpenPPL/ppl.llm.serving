@@ -29,73 +29,111 @@ using namespace grpc;
 
 namespace ppl { namespace llm {
 
-struct GRPCConnection final : public Connection {
-    GRPCConnection() : writer(&ctx) {
-        pthread_mutex_init(&send_lock, nullptr);
+static void AcquireEvent(GRPCEvent* event) {
+    event->refcount.fetch_add(1, std::memory_order_acq_rel);
+}
+
+static void ReleaseEvent(GRPCEvent* event) {
+    uint32_t prev = event->refcount.fetch_sub(1, std::memory_order_acq_rel);
+    if (prev == 1) {
+        delete event;
     }
-    ~GRPCConnection() {
-        pthread_mutex_destroy(&send_lock);
+}
+
+bool GRPCConnection::AddInfo(uint64_t id, const GRPCReqInfo& info) {
+    pthread_mutex_lock(&id2info_lock_);
+    auto ret_pair = id2info_.insert(make_pair(id, info));
+    bool ok = ret_pair.second;
+    pthread_mutex_unlock(&id2info_lock_);
+    return ok;
+}
+
+// ReleaseEvent() is needed after using info
+void GRPCConnection::FindInfo(uint64_t id, GRPCReqInfo* info) {
+    pthread_mutex_lock(&id2info_lock_);
+    auto ref = id2info_.find(id);
+    if (ref != id2info_.end()) {
+        *info = ref->second;
+        AcquireEvent(ref->second.event);
     }
+    pthread_mutex_unlock(&id2info_lock_);
+}
 
-    void Send(const std::vector<Response>&) override;
-    void NotifyFailure(uint64_t) override;
+void GRPCConnection::RemoveInfo(uint64_t id, GRPCReqInfo* info) {
+    pthread_mutex_lock(&id2info_lock_);
+    auto ref = id2info_.find(id);
+    if (ref != id2info_.end()) {
+        if (info) {
+            *info = ref->second;
+        }
+        id2info_.erase(ref);
+    }
+    pthread_mutex_unlock(&id2info_lock_);
+}
 
-    enum {
-        NEW,
-        SENDING,
-        FINISHED,
-    } status = NEW;
-    proto::BatchedRequest pb_req;
-    ServerContext ctx;
-
-    pthread_mutex_t send_lock;
-    int nr_finished_req = 0;
-    std::list<proto::BatchedResponse> send_queue;
-    ServerAsyncWriter<proto::BatchedResponse> writer;
-};
-
-static void SendBatchRes(proto::BatchedResponse&& pb_batch_res, uint32_t nr_finished_req, GRPCConnection* event) {
+static void SendBatchRes(proto::BatchedResponse&& pb_batch_res, int nr_finished_req, GRPCEvent* event) {
     pthread_mutex_lock(&event->send_lock);
     event->nr_finished_req += nr_finished_req;
     event->send_queue.emplace_back(std::move(pb_batch_res));
     if (event->send_queue.size() == 1) {
+        AcquireEvent(event);
         event->writer.Write(event->send_queue.front(), event);
     }
     pthread_mutex_unlock(&event->send_lock);
 }
 
-void GRPCConnection::Send(const std::vector<Response>& res_list) {
-    proto::BatchedResponse pb_batch_res;
-    uint32_t finished_cnt = 0;
+void GRPCConnection::Send(const vector<Response>& res_list) {
     for (auto& res: res_list) {
+        proto::BatchedResponse pb_batch_res;
+
+        GRPCReqInfo info;
+        FindInfo(res.id, &info);
+        if (!info.event) {
+            on_disconnected_func_(res.id);
+            continue;
+        }
+
         bool is_last = (res.flag == Response::IS_LAST);
         auto* pb_res = pb_batch_res.add_rsp();
         pb_res->set_status(is_last ? proto::FINISHED : proto::PROCESSING);
-        pb_res->set_id(res.id);
+        pb_res->set_id(info.orig_id);
         if (!res.generated.empty()) {
             pb_res->set_generated(res.generated);
         } else {
             auto* tokens = pb_res->mutable_tokens();
             tokens->add_ids(res.token);
         }
-        finished_cnt += is_last;
+
+        SendBatchRes(std::move(pb_batch_res), is_last, info.event);
+
+        if (is_last) {
+            RemoveInfo(res.id);
+            ReleaseEvent(info.event); // corresponding to AcquireEvent() before AddInfo()
+        }
+
+        ReleaseEvent(info.event); // corresponding to FindInfo()
     }
-    // SendOneRes(std::move(pb_batch_res), finished_cnt, this);
-    SendBatchRes(std::move(pb_batch_res), finished_cnt, this);  
 }
 
 void GRPCConnection::NotifyFailure(uint64_t id) {
+    GRPCReqInfo info;
+    RemoveInfo(id, &info);
+    if (!info.event) {
+        return;
+    }
+
     proto::BatchedResponse pb_batch_res;
     auto* pb_res = pb_batch_res.add_rsp();
     pb_res->set_status(proto::FAILED);
-    pb_res->set_id(id);
-    SendBatchRes(std::move(pb_batch_res), 1, this);
+    pb_res->set_id(info.orig_id);
+    SendBatchRes(move(pb_batch_res), 1, info.event);
+    ReleaseEvent(info.event); // corresponding to AcquireEvent() before AddInfo()
 }
 
 /* ------------------------------------------------------------------------- */
 
-GRPCServer::GRPCServer() {
-    arg_.on_disconnected_func = [](Connection*) {};
+GRPCServer::GRPCServer(GRPCConnection* c) {
+    arg_.conn = c;
 }
 
 void GRPCServer::Loop(RequestProcessor* processor) {
@@ -103,7 +141,8 @@ void GRPCServer::Loop(RequestProcessor* processor) {
     auto service = &arg_.service;
 
     // prepare to process one request
-    auto new_event = new GRPCConnection();
+    auto new_event = new GRPCEvent();
+    AcquireEvent(new_event);
     service->RequestGeneration(&new_event->ctx, &new_event->pb_req, &new_event->writer, arg_.new_call_cq.get(),
                                arg_.notification_cq.get(), new_event);
 
@@ -115,26 +154,31 @@ void GRPCServer::Loop(RequestProcessor* processor) {
             break;
         }
 
-        auto event = static_cast<GRPCConnection*>(tag);
+        auto event = static_cast<GRPCEvent*>(tag);
         switch (event->status) {
-            case GRPCConnection::NEW:
+            case GRPCEvent::NEW: {
                 // prepare to process next request
-                new_event = new GRPCConnection();
+                new_event = new GRPCEvent();
+                AcquireEvent(new_event);
                 service->RequestGeneration(&new_event->ctx, &new_event->pb_req, &new_event->writer,
                                            arg_.new_call_cq.get(), arg_.notification_cq.get(), new_event);
 
                 if (event->pb_req.req_size() == 0) {
-                    delete event;
+                    ReleaseEvent(event); // corresponding to AcquireEvent() before writer.Write()
                     break;
                 }
 
-                // change status to SENDING in case that request(s) are sent before Process() finish
-                event->status = GRPCConnection::SENDING;
+                // change status to SENDING in case that request(s) are sent before processing is done
+                event->status = GRPCEvent::SENDING;
+
+                // generate mapped id first. in case connection is gone before processing is done.
+                event->mapped_id_start = uuid_seq_;
+                uuid_seq_ += event->pb_req.req_size();
 
                 for (int req_idx = 0; req_idx < event->pb_req.req_size(); ++req_idx) {
                     auto& pb_req = event->pb_req.req(req_idx);
                     auto req = make_shared<Request>();
-                    req->id = pb_req.id();
+                    req->id = event->mapped_id_start + req_idx;
                     if (!pb_req.prompt().empty()) {
                         req->prompt = pb_req.prompt();
                     } else {
@@ -144,9 +188,15 @@ void GRPCServer::Loop(RequestProcessor* processor) {
                     req->temperature = pb_req.temperature();
                     req->generation_length = pb_req.stopping_parameters().max_new_tokens();
                     req->early_stopping = !pb_req.stopping_parameters().ignore_eos_token();
-                    processor->Process(req, event);
+
+                    AcquireEvent(event);
+                    arg_.conn->AddInfo(req->id, {pb_req.id(), event});
+                    processor->Process(req);
                 }
+
+                ReleaseEvent(event); // corresponding to AcquireEvent() before RequestGeneration()
                 break;
+            }
             default:
                 LOG(ERROR) << "impossible or invalid status [" << (uint32_t)event->status << "] in Loop().";
                 return;
@@ -166,33 +216,50 @@ void* GRPCServer::NewCallThreadFunc(void* arg) {
             break;
         }
 
-        auto event = static_cast<GRPCConnection*>(tag);
+        auto event = static_cast<GRPCEvent*>(tag);
         if (!ok) {
-            LOG(ERROR) << "get request failed. waiting for next one...";
+            LOG(ERROR) << "client disconnected. waiting for next one...";
             if (tag) {
-                targ->on_disconnected_func(event);
-                delete event;
+                // cannot enqueue if the connection is invalid
+                if (event->mapped_id_start != UINT64_MAX) {
+                    pthread_mutex_lock(&event->send_lock);
+                    if (event->mapped_id_start != UINT64_MAX) {
+                        uint64_t id_end = event->mapped_id_start + event->pb_req.req_size();
+                        for (uint64_t id = event->mapped_id_start; id < id_end; ++id) {
+                            GRPCReqInfo info;
+                            targ->conn->RemoveInfo(id, &info);
+                            if (info.event) {
+                                targ->conn->Disconnect(id);
+                                ReleaseEvent(info.event); // corresponding to AcquireEvent() before AddInfo()
+                            }
+                        }
+                        event->mapped_id_start = UINT64_MAX;
+                    }
+                    pthread_mutex_unlock(&event->send_lock);
+                }
+                ReleaseEvent(event); // corresponding to AcquireEvent() before writer.Write()
             }
             continue;
         }
 
         switch (event->status) {
-            case GRPCConnection::SENDING:
+            case GRPCEvent::SENDING:
                 pthread_mutex_lock(&event->send_lock);
                 event->send_queue.pop_front();
                 if (event->send_queue.empty()) {
                     if (event->nr_finished_req == event->pb_req.req_size()) {
-                        event->status = GRPCConnection::FINISHED;
+                        event->status = GRPCEvent::FINISHED;
+                        AcquireEvent(event);
                         event->writer.Finish(grpc::Status::OK, event);
                     }
                 } else {
+                    AcquireEvent(event);
                     event->writer.Write(event->send_queue.front(), event);
                 }
                 pthread_mutex_unlock(&event->send_lock);
-                break;
-            case GRPCConnection::FINISHED:
-                targ->on_disconnected_func(event);
-                delete event;
+                // fall through
+            case GRPCEvent::FINISHED:
+                ReleaseEvent(event); // corresponding to AcquireEvent() before writer.Write() or writer.Finish()
                 break;
             default:
                 LOG(ERROR) << "impossible or invalid status [" << (uint32_t)event->status << "] in NewCallThreadFunc.";

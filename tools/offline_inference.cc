@@ -59,6 +59,8 @@ public:
         pthread_mutex_destroy(&finish_lock_);
     }
 
+    void OnTokenize(uint64_t id, const std::vector<int>&) override {}
+
     void Send(const std::vector<Response>& batched_rsp) override {
         for (const auto& rsp : batched_rsp) {
             auto& rsp_str = tid_rsp_map_->emplace(rsp.id, std::string()).first->second;
@@ -98,27 +100,6 @@ private:
 
     pthread_mutex_t finish_lock_;
     pthread_cond_t finish_signal_;
-};
-
-class LLM {
-public:
-    LLM(RequestProcessor* llm_worker) : llm_worker_(llm_worker) {}
-
-    void Generate(const std::vector<std::shared_ptr<Request>>& req_list,
-                  std::unordered_map<uint64_t, std::string>* tid_rsp_map) {
-        conn_.SetWanted(req_list.size());
-        conn_.SetTidRspMap(tid_rsp_map);
-
-        for (auto req : req_list) {
-            llm_worker_->Process(req, &conn_);
-        }
-        conn_.Wait();
-        return;
-    }
-
-private:
-    RequestProcessor* llm_worker_;
-    LocalConnection conn_;
 };
 
 int main(int argc, char const* argv[]) {
@@ -175,22 +156,27 @@ int main(int argc, char const* argv[]) {
         request_list.push_back(std::make_shared<Request>(i, prompts[i], 1.0, 64));
     }
 
+    unordered_map<uint64_t, string> tid_rsp_map;
+    LocalConnection local_conn;
+    local_conn.SetWanted(request_list.size());
+    local_conn.SetTidRspMap(&tid_rsp_map);
+
     auto llm_worker = unique_ptr<RequestProcessor>(
-        ModelFactory::Create(server_config.model_type, resource, model_config, worker_config));
+        ModelFactory::Create(server_config.model_type, resource, model_config, worker_config, &local_conn));
     if (!llm_worker) {
         LOG(ERROR) << "Create llm worker failed";
         return -1;
     }
-
-    LLM llm(llm_worker.get());
-    unordered_map<uint64_t, string> tid_rsp_map;
 
     LOG(INFO) << "before generate";
 
     double generate_time;
     {
         ppl::llm::utils::TimingGuard __timing__(&generate_time);
-        llm.Generate(request_list, &tid_rsp_map);
+        for (auto req : request_list) {
+            llm_worker->Process(req);
+        }
+        local_conn.Wait();
     }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));

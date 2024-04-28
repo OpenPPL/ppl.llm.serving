@@ -82,24 +82,26 @@ int main(int argc, char* argv[]) {
     resource.device_worker_pool = &resource_manager.device_worker_pool;
     resource.tokenizer = tokenizer.get();
 
-    GRPCServer svr;
+    GRPCConnection conn;
+
+    auto llm_worker = unique_ptr<RequestProcessor>(
+        ModelFactory::Create(server_config.model_type, resource, model_config, worker_config, &conn));
+    if (!llm_worker) {
+        LOG(ERROR) << "Create llm worker failed";
+        return -1;
+    }
+
+    conn.SetOnDisconnectedFunc([&llm_worker](uint64_t id) {
+        llm_worker->ClearTask(id);
+    });
+
+    GRPCServer svr(&conn);
     auto listen_addr = server_config.host + ":" + std::to_string(server_config.port);
     rc = svr.Init(listen_addr);
     if (rc != RC_SUCCESS) {
         LOG(ERROR) << "GRPCConnection init failed.";
         return -1;
     }
-
-    auto llm_worker = unique_ptr<RequestProcessor>(
-        ModelFactory::Create(server_config.model_type, resource, model_config, worker_config));
-    if (!llm_worker) {
-        LOG(ERROR) << "Create llm worker failed";
-        return -1;
-    }
-
-    svr.SetOnDisconnectedFunc([&llm_worker](Connection* c) {
-        llm_worker->ClearTask(c);
-    });
 
     LOG(INFO) << "listening on [" << listen_addr << "]";
 

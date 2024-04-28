@@ -27,21 +27,87 @@
 #include <pthread.h>
 #include <map>
 #include <functional>
+#include <atomic>
 
 namespace ppl { namespace llm {
 
-struct GRPCConnection;
+struct GRPCEvent final {
+    GRPCEvent() : writer(&ctx), refcount(0) {
+        pthread_mutex_init(&send_lock, nullptr);
+    }
+    ~GRPCEvent() {
+        pthread_mutex_destroy(&send_lock);
+    }
+
+    enum {
+        NEW,
+        SENDING,
+        FINISHED,
+    } status = NEW;
+    proto::BatchedRequest pb_req;
+    grpc::ServerContext ctx;
+
+    pthread_mutex_t send_lock;
+    uint32_t nr_finished_req = 0;
+    std::list<proto::BatchedResponse> send_queue;
+    grpc::ServerAsyncWriter<proto::BatchedResponse> writer;
+
+    /* mapped ids of pb_req. used to remove info when the connection is gone */
+    uint64_t mapped_id_start = UINT64_MAX;
+
+    /*
+      an event may be invalid during processing. for example, client is killed before processing is done.
+    */
+    std::atomic<uint32_t> refcount;
+
+    GRPCEvent(const GRPCEvent&) = delete;
+    GRPCEvent(GRPCEvent&&) = delete;
+    void operator=(const GRPCEvent&) = delete;
+    void operator=(GRPCEvent&&) = delete;
+};
+
+struct GRPCReqInfo final {
+    uint64_t orig_id = 0;
+    GRPCEvent* event = nullptr;
+};
+
+class GRPCConnection final : public Connection {
+public:
+    GRPCConnection() {
+        pthread_mutex_init(&id2info_lock_, nullptr);
+    }
+    ~GRPCConnection() {
+        pthread_mutex_destroy(&id2info_lock_);
+    }
+
+    bool AddInfo(uint64_t id, const GRPCReqInfo& info);
+    void FindInfo(uint64_t id, GRPCReqInfo* info);
+    void RemoveInfo(uint64_t id, GRPCReqInfo* info = nullptr);
+
+    void SetOnDisconnectedFunc(const std::function<void(uint64_t)>& f) {
+        on_disconnected_func_ = f;
+    }
+
+    void Disconnect(uint64_t id) {
+        on_disconnected_func_(id);
+    }
+
+    void OnTokenize(uint64_t, const std::vector<int>&) override {}
+    void Send(const std::vector<Response>&) override;
+    void NotifyFailure(uint64_t) override;
+
+private:
+    pthread_mutex_t id2info_lock_;
+    std::map<uint64_t, GRPCReqInfo> id2info_;
+    std::function<void(uint64_t)> on_disconnected_func_ = {};
+};
 
 class GRPCServer final {
 public:
-    GRPCServer();
+    GRPCServer(GRPCConnection*);
     ~GRPCServer();
     ppl::common::RetCode Init(const std::string& addr);
     void Loop(RequestProcessor*);
-
-    void SetOnDisconnectedFunc(const std::function<void(Connection*)>& f) {
-        arg_.on_disconnected_func = f;
-    }
 
 private:
     static void* NewCallThreadFunc(void*);
@@ -59,13 +125,14 @@ public:
         std::unique_ptr<grpc::ServerCompletionQueue> notification_cq;
         std::unique_ptr<grpc::ServerCompletionQueue> new_call_cq;
 
-        std::function<void(Connection*)> on_disconnected_func;
+        GRPCConnection* conn = nullptr;
     };
 
 private:
     grpc::ServerBuilder builder_;
     std::unique_ptr<grpc::Server> server_;
 
+    uint64_t uuid_seq_ = 0;
     bool new_call_thread_created_ = false;
     pthread_t new_call_thread_;
     ThreadArg arg_;

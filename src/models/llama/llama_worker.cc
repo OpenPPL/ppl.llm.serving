@@ -81,68 +81,38 @@ struct Profiler final {
     double step_total_duration = 0;
 };
 
-static void FindUData(unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data, pthread_mutex_t* uuid_data_lock,
-                      uint64_t uuid, LLaMAWorker::UuidData* udata, bool should_remove) {
-    pthread_mutex_lock(uuid_data_lock);
-    auto uuid_data_ref = uuid_data->find(uuid);
-    if (uuid_data_ref != uuid_data->end()) {
-        *udata = uuid_data_ref->second;
-        if (should_remove) {
-            uuid_data->erase(uuid_data_ref);
-        }
-    }
-    pthread_mutex_unlock(uuid_data_lock);
-}
-
 class DecodeAndSendTask final {
 public:
     // range is [start_id, end_id)
     DecodeAndSendTask(uint32_t start_id, uint32_t end_id, const utils::Tokenizer* tokenizer,
-                      unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data, pthread_mutex_t* uuid_data_lock,
-                      std::vector<TidGenToken>* tid_gen_token_list, pthread_mutex_t* tid_shutdown_lock,
-                      unordered_set<uint64_t>* tid_shutdown)
+                      std::vector<TidGenToken>* tid_gen_token_list, Connection* c)
         : start_id_(start_id)
         , end_id_(end_id)
         , tokenizer_(tokenizer)
-        , uuid_data_(uuid_data)
-        , uuid_data_lock_(uuid_data_lock)
         , tid_gen_token_list_(tid_gen_token_list)
-        , tid_shutdown_lock_(tid_shutdown_lock)
-        , tid_shutdown_(tid_shutdown) {}
+        , conn_(c) {}
 
     RetCode Process() {
         // for circumstance task_num < thread_num
         if (start_id_ >= tid_gen_token_list_->size()) {
             return RC_SUCCESS;
         }
-        map<Connection*, std::vector<Response>> c2r;
+
+        vector<Response> rsp_list(end_id_ - start_id_);
         for (uint32_t i = start_id_; i < end_id_; ++i) {
             const auto& tid_gen_token = tid_gen_token_list_->at(i);
-            uint64_t tid = tid_gen_token.tid;
             int token = tid_gen_token.token;
-            Response rsp;
+            Response& rsp = rsp_list[i - start_id_];
             if (tid_gen_token.is_token_in_out) {
                 rsp.token = token;
             } else {
                 tokenizer_->Decode(&token, 1, &rsp.generated);
             }
-            LLaMAWorker::UuidData udata;
-            FindUData(uuid_data_, uuid_data_lock_, tid, &udata, tid_gen_token.is_last);
-            if (udata.conn) {
-                rsp.id = udata.req_id;
-                rsp.flag = tid_gen_token.is_last ? Response::IS_LAST : Response::NORMAL;
-                c2r[udata.conn].push_back(rsp);
-            } else {
-                if (!tid_gen_token.is_last) {
-                    pthread_mutex_lock(tid_shutdown_lock_);
-                    tid_shutdown_->insert(tid);
-                    pthread_mutex_unlock(tid_shutdown_lock_);
-                }
-            }
+            rsp.id = tid_gen_token.tid;
+            rsp.flag = tid_gen_token.is_last ? Response::IS_LAST : Response::NORMAL;
         }
-        for (auto& iter : c2r) {
-            iter.first->Send(iter.second);
-        }
+        conn_->Send(rsp_list);
+
         return RC_SUCCESS;
     }
 
@@ -150,11 +120,8 @@ private:
     uint32_t start_id_;
     uint32_t end_id_;
     const utils::Tokenizer* tokenizer_;
-    unordered_map<uint64_t, LLaMAWorker::UuidData>* uuid_data_;
-    pthread_mutex_t* uuid_data_lock_;
     std::vector<TidGenToken>* tid_gen_token_list_;
-    pthread_mutex_t* tid_shutdown_lock_;
-    unordered_set<uint64_t>* tid_shutdown_;
+    Connection* conn_;
 };
 
 #ifdef PPL_LLM_ENABLE_PROFILING
@@ -378,15 +345,17 @@ RetCode LLaMAWorker::CheckParameters() const {
     return RC_SUCCESS;
 }
 
-LLaMAWorker::LLaMAWorker(const Resource& resource, const ModelConfig& mconfig, const WorkerConfig& wconfig)
-    : tokenizer_(resource.tokenizer)
+LLaMAWorker::LLaMAWorker(const Resource& resource, const ModelConfig& mconfig, const WorkerConfig& wconfig,
+                         Connection* c)
+    : RequestProcessor(c)
+    , tokenizer_(resource.tokenizer)
     , model_config_(mconfig)
     , worker_config_(wconfig)
     , device_worker_pool_(resource.device_worker_pool)
     , tensor_parallel_size_(resource.tensor_parallel_size)
     , worker_thread_args_(resource.tensor_parallel_size)
     , sampler_(resource.sampler) {
-    pthread_mutex_init(&uuid_data_lock_, nullptr);
+    pthread_mutex_init(&tid_shutdown_lock_, nullptr);
 
     kv_cache_max_tokens_ = resource.kv_cache_max_tokens;
 
@@ -433,7 +402,7 @@ LLaMAWorker::~LLaMAWorker() {
     }
 
     pthread_cond_destroy(&req_signal_);
-    pthread_mutex_destroy(&uuid_data_lock_);
+    pthread_mutex_destroy(&tid_shutdown_lock_);
 }
 
 RetCode LLaMAWorker::Init() {
@@ -517,9 +486,10 @@ struct RequestCheckResult final {
 };
 
 static bool ParseRequest(const LlamaRequest& req, const RequestCheckResult& check_res,
-                         WorkerController* worker_controller, unordered_map<uint64_t, TidController>* tid_controllers) {
+                         WorkerController* worker_controller, unordered_map<uint64_t, TidController>* tid_controllers,
+                         Connection* conn) {
     if (check_res.rest_iters < 0) {
-        req.conn->NotifyFailure(req.orig->id);
+        conn->NotifyFailure(req.orig->id);
         return true;
     }
 
@@ -528,7 +498,7 @@ static bool ParseRequest(const LlamaRequest& req, const RequestCheckResult& chec
         return false;
     }
 
-    auto tid = req.uuid;
+    auto tid = req.orig->id;
     auto& tid_ctrl = tid_controllers->emplace(tid, TidController()).first->second;
     tid_ctrl.tid = tid;
     tid_ctrl.temperature = req.orig->temperature;
@@ -550,18 +520,10 @@ static bool ParseRequest(const LlamaRequest& req, const RequestCheckResult& chec
     return true;
 }
 
-void LLaMAWorker::ClearTask(Connection* conn) {
-    pthread_mutex_lock(&uuid_data_lock_);
-    auto ref = conn2uuid_.find(conn);
-    if (ref == conn2uuid_.end()) {
-        pthread_mutex_unlock(&uuid_data_lock_);
-        return;
-    }
-    for (auto x = ref->second.begin(); x != ref->second.end(); ++x) {
-        uuid_data_.erase(*x);
-    }
-    conn2uuid_.erase(ref);
-    pthread_mutex_unlock(&uuid_data_lock_);
+void LLaMAWorker::ClearTask(uint64_t tid) {
+    pthread_mutex_lock(&tid_shutdown_lock_);
+    worker_controller_.tid_shutdown.insert(tid);
+    pthread_mutex_unlock(&tid_shutdown_lock_);
 }
 
 static int RemoveFinishedTask(WorkerController* worker_controller, void* ptr) {
@@ -832,7 +794,7 @@ void LLaMAWorker::Work() {
                         break;
                     }
 
-                    if (!ParseRequest(*req, check_res, &worker_controller_, &tid_controllers)) {
+                    if (!ParseRequest(*req, check_res, &worker_controller_, &tid_controllers, conn_)) {
                         break;
                     }
 
@@ -939,9 +901,7 @@ void LLaMAWorker::Work() {
                 uint32_t start_id = ithr * n_block;
                 uint32_t end_id = (ithr + 1) * n_block > task_size ? task_size : (ithr + 1) * n_block;
 
-                auto task =
-                    DecodeAndSendTask(start_id, end_id, tokenizer_, &uuid_data_, &uuid_data_lock_, &tid_gen_token_list,
-                                      &tid_shutdown_lock_, &worker_controller_.tid_shutdown);
+                auto task = DecodeAndSendTask(start_id, end_id, tokenizer_, &tid_gen_token_list, conn_);
                 task.Process();
             });
         }
@@ -979,10 +939,8 @@ void LLaMAWorker::Work() {
     decoder_thread_pool_.Wait();
 }
 
-void LLaMAWorker::Process(const shared_ptr<Request>& req, Connection* conn) {
+void LLaMAWorker::Process(const shared_ptr<Request>& req) {
     auto lreq = make_shared<LlamaRequest>();
-    lreq->uuid = uuid_seq_++;
-    lreq->conn = conn;
     lreq->orig = req;
     if (!req->token_ids) {
         lreq->token_id_list = std::make_shared<std::vector<int>>();
@@ -990,17 +948,12 @@ void LLaMAWorker::Process(const shared_ptr<Request>& req, Connection* conn) {
         lreq->stop_tokens = std::make_shared<std::unordered_set<int>>();
         lreq->stop_tokens->insert(tokenizer_->GetEosId());
         lreq->is_token_in_out = false;
+        conn_->OnTokenize(req->id, *lreq->token_id_list);
     } else {
         lreq->token_id_list = req->token_ids;
         lreq->stop_tokens = req->stop_tokens;
         lreq->is_token_in_out = true;
     }
-
-    pthread_mutex_lock(&uuid_data_lock_);
-    uuid_data_.insert(make_pair(lreq->uuid, UuidData(req->id, conn)));
-    auto ret_pair = conn2uuid_.insert(make_pair(conn, vector<uint64_t>()));
-    ret_pair.first->second.push_back(lreq->uuid);
-    pthread_mutex_unlock(&uuid_data_lock_);
 
     sched_.PushRequest(lreq);
     if (sched_.GetPendingSize() == 1) {
