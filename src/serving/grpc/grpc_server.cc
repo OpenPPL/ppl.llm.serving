@@ -175,6 +175,18 @@ void GRPCServer::Loop(RequestProcessor* processor) {
                 event->mapped_id_start = uuid_seq_;
                 uuid_seq_ += event->pb_req.req_size();
 
+                /*
+                  Add event info before processing.
+                  If the first response fails, it will remove all infos associated with the same event
+                  in NewCallThreadFunc().
+                  This can reduce unnecessary work in Send().
+                */
+                for (int i = 0; i < event->pb_req.req_size(); ++i) {
+                    auto& pb_req = event->pb_req.req(i);
+                    AcquireEvent(event);
+                    arg_.conn->AddInfo(event->mapped_id_start + i, {pb_req.id(), event});
+                }
+
                 for (int req_idx = 0; req_idx < event->pb_req.req_size(); ++req_idx) {
                     auto& pb_req = event->pb_req.req(req_idx);
                     auto req = make_shared<Request>();
@@ -188,9 +200,6 @@ void GRPCServer::Loop(RequestProcessor* processor) {
                     req->temperature = pb_req.temperature();
                     req->generation_length = pb_req.stopping_parameters().max_new_tokens();
                     req->early_stopping = !pb_req.stopping_parameters().ignore_eos_token();
-
-                    AcquireEvent(event);
-                    arg_.conn->AddInfo(req->id, {pb_req.id(), event});
                     processor->Process(req);
                 }
 
