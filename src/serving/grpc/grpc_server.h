@@ -82,7 +82,7 @@ public:
 
     bool AddInfo(uint64_t id, const GRPCReqInfo& info);
     void FindInfo(uint64_t id, GRPCReqInfo* info);
-    void RemoveInfo(uint64_t id, GRPCReqInfo* info = nullptr);
+    void RemoveInfo(uint64_t id, GRPCReqInfo* info);
 
     void OnTokenize(uint64_t, const std::vector<int>&) override {}
     void Send(const std::vector<Response>&) override;

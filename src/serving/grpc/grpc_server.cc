@@ -63,9 +63,7 @@ void GRPCConnection::RemoveInfo(uint64_t id, GRPCReqInfo* info) {
     pthread_mutex_lock(&id2info_lock_);
     auto ref = id2info_.find(id);
     if (ref != id2info_.end()) {
-        if (info) {
-            *info = ref->second;
-        }
+        *info = ref->second;
         id2info_.erase(ref);
     }
     pthread_mutex_unlock(&id2info_lock_);
@@ -106,8 +104,11 @@ void GRPCConnection::Send(const vector<Response>& res_list) {
         SendBatchRes(std::move(pb_batch_res), is_last, info.event);
 
         if (is_last) {
-            RemoveInfo(res.id);
-            ReleaseEvent(info.event); // corresponding to AcquireEvent() before AddInfo()
+            GRPCReqInfo deleted_info;
+            RemoveInfo(res.id, &deleted_info);
+            if (deleted_info.event) {
+                ReleaseEvent(deleted_info.event); // corresponding to AcquireEvent() before AddInfo()
+            }
         }
 
         ReleaseEvent(info.event); // corresponding to FindInfo()
