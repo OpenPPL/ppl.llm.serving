@@ -91,11 +91,11 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
-    conn.SetOnDisconnectedFunc([&llm_worker](uint64_t id) {
-        llm_worker->ClearTask(id);
-    });
+    auto on_disconnected_func = [worker = llm_worker.get()](uint64_t id) {
+        worker->ClearTask(id);
+    };
 
-    GRPCServer svr(&conn);
+    GRPCServer svr(&conn, on_disconnected_func);
     auto listen_addr = server_config.host + ":" + std::to_string(server_config.port);
     rc = svr.Init(listen_addr);
     if (rc != RC_SUCCESS) {

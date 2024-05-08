@@ -84,16 +84,15 @@ static void SendBatchRes(proto::BatchedResponse&& pb_batch_res, int nr_finished_
 
 void GRPCConnection::Send(const vector<Response>& res_list) {
     for (auto& res: res_list) {
-        proto::BatchedResponse pb_batch_res;
-
         GRPCReqInfo info;
         FindInfo(res.id, &info);
         if (!info.event) {
-            on_disconnected_func_(res.id);
+            // event was removed by some failed response in NewCallThreadFunc()
             continue;
         }
 
         bool is_last = (res.flag == Response::IS_LAST);
+        proto::BatchedResponse pb_batch_res;
         auto* pb_res = pb_batch_res.add_rsp();
         pb_res->set_status(is_last ? proto::FINISHED : proto::PROCESSING);
         pb_res->set_id(info.orig_id);
@@ -132,8 +131,9 @@ void GRPCConnection::NotifyFailure(uint64_t id) {
 
 /* ------------------------------------------------------------------------- */
 
-GRPCServer::GRPCServer(GRPCConnection* c) {
+GRPCServer::GRPCServer(GRPCConnection* c, const function<void(uint64_t)>& on_disconnected_func) {
     arg_.conn = c;
+    arg_.on_disconnected_func = on_disconnected_func;
 }
 
 void GRPCServer::Loop(RequestProcessor* processor) {
@@ -238,7 +238,7 @@ void* GRPCServer::NewCallThreadFunc(void* arg) {
                             GRPCReqInfo info;
                             targ->conn->RemoveInfo(id, &info);
                             if (info.event) {
-                                targ->conn->Disconnect(id);
+                                targ->on_disconnected_func(id);
                                 ReleaseEvent(info.event); // corresponding to AcquireEvent() before AddInfo()
                             }
                         }

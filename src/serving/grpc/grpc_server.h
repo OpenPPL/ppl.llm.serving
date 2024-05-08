@@ -48,7 +48,7 @@ struct GRPCEvent final {
     grpc::ServerContext ctx;
 
     pthread_mutex_t send_lock;
-    uint32_t nr_finished_req = 0;
+    int nr_finished_req = 0;
     std::list<proto::BatchedResponse> send_queue;
     grpc::ServerAsyncWriter<proto::BatchedResponse> writer;
 
@@ -84,14 +84,6 @@ public:
     void FindInfo(uint64_t id, GRPCReqInfo* info);
     void RemoveInfo(uint64_t id, GRPCReqInfo* info = nullptr);
 
-    void SetOnDisconnectedFunc(const std::function<void(uint64_t)>& f) {
-        on_disconnected_func_ = f;
-    }
-
-    void Disconnect(uint64_t id) {
-        on_disconnected_func_(id);
-    }
-
     void OnTokenize(uint64_t, const std::vector<int>&) override {}
     void Send(const std::vector<Response>&) override;
     void NotifyFailure(uint64_t) override;
@@ -99,12 +91,11 @@ public:
 private:
     pthread_mutex_t id2info_lock_;
     std::map<uint64_t, GRPCReqInfo> id2info_;
-    std::function<void(uint64_t)> on_disconnected_func_ = {};
 };
 
 class GRPCServer final {
 public:
-    GRPCServer(GRPCConnection*);
+    GRPCServer(GRPCConnection*, const std::function<void(uint64_t)>& on_disconnected_func);
     ~GRPCServer();
     ppl::common::RetCode Init(const std::string& addr);
     void Loop(RequestProcessor*);
@@ -115,6 +106,7 @@ private:
 public:
     struct ThreadArg final {
         ppl::llm::proto::LLMService::AsyncService service;
+        std::function<void(uint64_t)> on_disconnected_func = {};
 
         /*
           https://groups.google.com/g/grpc-io/c/V4NAQ77PMEo
