@@ -29,6 +29,7 @@
 #include "ppl/nn/models/onnx/runtime_builder_factory.h"
 #include "ppl/nn/runtime/tensor.h"
 #include "ppl/common/threadpool.h"
+#include "ppl/common/typed_mpsc_queue.h"
 
 #include <memory>
 #include <iostream>
@@ -43,6 +44,14 @@ struct TidGenToken final {
     int token;
     bool is_last;
     bool is_token_in_out;
+};
+
+struct FinishedTaskInfo final {
+    uint64_t id = UINT64_MAX;
+    enum {
+        FROM_WORKER,
+        FROM_CONN,
+    } type;
 };
 
 struct TidController final {
@@ -80,8 +89,7 @@ struct WorkerController final {
     std::vector<int64_t> cache_indices; // incoming && finish
     std::vector<int64_t> kv_starts; // iter
     std::vector<float> temperatures; // iter
-    std::vector<uint64_t> tid_finished; // iter
-    std::unordered_set<uint64_t> tid_shutdown;
+    ppl::common::TypedMPSCQueue<FinishedTaskInfo> finished_tasks;
 
     void Reset() {
         decoding_batches = 0;
@@ -99,7 +107,6 @@ struct WorkerController final {
         kv_starts.clear();
 
         temperatures.clear();
-        tid_finished.clear();
     }
 };
 
@@ -130,12 +137,6 @@ struct LlamaRequest final {
 
 class LLaMAWorker final : public RequestProcessor {
 public:
-    struct UuidData final {
-        UuidData(uint64_t rid = UINT64_MAX, Connection* c = nullptr) : req_id(rid), conn(c) {}
-        uint64_t req_id;
-        Connection* conn;
-    };
-
     LLaMAWorker(const Resource& resource, const ModelConfig& mconfig, const WorkerConfig& wconfig,
                 Connection*);
 
@@ -149,8 +150,9 @@ public:
 private:
     ppl::common::RetCode CheckParameters() const;
     void Work();
-    void DeleteTask(const std::vector<uint64_t>& finished_list,
-                    std::unordered_map<uint64_t, TidController>* tid_controllers);
+    void DeleteTasks(ppl::common::TypedMPSCQueue<FinishedTaskInfo>* finished_tasks,
+                     std::unordered_map<uint64_t, TidController>* tid_controllers,
+                     int* accu_task_count);
 
 private:
     static void* WorkerThreadFunc(void*);
@@ -170,7 +172,6 @@ private:
     std::vector<WorkerThreadArg> worker_thread_args_;
 
     ppl::common::StaticThreadPool decoder_thread_pool_;
-    pthread_mutex_t tid_shutdown_lock_;
 
     utils::IndexManager idx_mgr_;
     utils::Sampler* sampler_;

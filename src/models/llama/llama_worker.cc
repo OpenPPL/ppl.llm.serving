@@ -295,8 +295,6 @@ LLaMAWorker::LLaMAWorker(const Resource& resource, const ModelConfig& mconfig, c
     , tensor_parallel_size_(resource.tensor_parallel_size)
     , worker_thread_args_(resource.tensor_parallel_size)
     , sampler_(resource.sampler) {
-    pthread_mutex_init(&tid_shutdown_lock_, nullptr);
-
     kv_cache_max_tokens_ = resource.kv_cache_max_tokens;
 
     idx_mgr_.Init(kv_cache_max_tokens_);
@@ -342,7 +340,6 @@ LLaMAWorker::~LLaMAWorker() {
     }
 
     pthread_cond_destroy(&req_signal_);
-    pthread_mutex_destroy(&tid_shutdown_lock_);
 }
 
 RetCode LLaMAWorker::Init() {
@@ -461,9 +458,7 @@ static bool ParseRequest(const LlamaRequest& req, const RequestCheckResult& chec
 }
 
 void LLaMAWorker::ClearTask(uint64_t tid) {
-    pthread_mutex_lock(&tid_shutdown_lock_);
-    worker_controller_.tid_shutdown.insert(tid);
-    pthread_mutex_unlock(&tid_shutdown_lock_);
+    worker_controller_.finished_tasks.Push({tid, FinishedTaskInfo::FROM_CONN});
 }
 
 static int RemoveFinishedTask(WorkerController* worker_controller, void* ptr) {
@@ -486,11 +481,20 @@ static int RemoveFinishedTask(WorkerController* worker_controller, void* ptr) {
     return left;
 }
 
-void LLaMAWorker::DeleteTask(const vector<uint64_t>& finished_list,
-                             unordered_map<uint64_t, TidController>* tid_controllers) {
+void LLaMAWorker::DeleteTasks(TypedMPSCQueue<FinishedTaskInfo>* finished_tasks,
+                              unordered_map<uint64_t, TidController>* tid_controllers,
+                              int* accu_task_count) {
     // process finished task
-    for (size_t i = 0; i < finished_list.size(); ++i) {
-        auto tid = finished_list[i];
+    FinishedTaskInfo info;
+    while (true) {
+        info = finished_tasks->Pop();
+        if (info.id == UINT64_MAX) {
+            break;
+        }
+
+        ++(*accu_task_count);
+
+        uint64_t tid = info.id;
         auto tid_it = tid_controllers->find(tid);
         if (tid_it == tid_controllers->end()) {
             LOG(ERROR) << "find non exist tid: " << tid;
@@ -549,8 +553,6 @@ static void UpdateInput(const unordered_map<uint64_t, TidController>& tid_contro
     worker_controller->kv_starts.clear();
     worker_controller->kv_starts.reserve(running_batch + 1);
     worker_controller->kv_starts.push_back(0);
-
-    worker_controller->tid_finished.clear();
 
     for (int i = 0; i < running_batch; ++i) {
         auto* tid_ctrl = worker_controller->tid_list[i];
@@ -824,16 +826,13 @@ void LLaMAWorker::Work() {
 
                 tid_gen_token_list.emplace_back(tid_ctrl->tid, gen_token, false, tid_ctrl->is_token_in_out);
                 // finished task
-                bool is_shutdown =
-                    worker_controller_.tid_shutdown.find(tid_ctrl->tid) != worker_controller_.tid_shutdown.end();
-                if (tid_ctrl->rest_iters <= 0 || (tid_ctrl->early_stopping && tid_ctrl->stop_tokens->find(gen_token) != tid_ctrl->stop_tokens->end()) || is_shutdown) {
+                if (tid_ctrl->rest_iters <= 0 || (tid_ctrl->early_stopping && tid_ctrl->stop_tokens->find(gen_token) != tid_ctrl->stop_tokens->end())) {
                     tid_gen_token_list.back().is_last = true;
                     if (cache_cool_down_count > 0)
                         cache_cool_down_count--;
-                    worker_controller_.tid_finished.push_back(tid_ctrl->tid);
+                    worker_controller_.finished_tasks.Push({tid_ctrl->tid, FinishedTaskInfo::FROM_WORKER});
                 }
             }
-            worker_controller_.tid_shutdown.clear();
 
             decoder_thread_pool_.RunAsync([this, &tid_gen_token_list](uint32_t nthr, uint32_t ithr) {
                 size_t task_size = tid_gen_token_list.size();
@@ -855,10 +854,9 @@ void LLaMAWorker::Work() {
             LOG(DEBUG) << "Rest iters: " << worker_controller_.total_rest_iters;
 
             // early finish
-            if (worker_controller_.tid_finished.size() > 0) {
+            if (worker_controller_.finished_tasks.Size() > 0) {
                 LOG(DEBUG) << "Do early finish";
-                profiler.finished_cnt += worker_controller_.tid_finished.size();
-                DeleteTask(worker_controller_.tid_finished, &tid_controllers);
+                DeleteTasks(&worker_controller_.finished_tasks, &tid_controllers, &profiler.finished_cnt);
             }
         }
         profiler.early_finish_duration += profiler.step_early_finish_duration;
