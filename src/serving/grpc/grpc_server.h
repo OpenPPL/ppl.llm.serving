@@ -85,6 +85,7 @@ public:
     void RemoveInfo(uint64_t id, GRPCReqInfo* info);
 
     void OnTokenize(uint64_t, const std::vector<int>&) override {}
+    void OnProfiling(const Profiler&) override;
     void Send(const std::vector<Response>&) override;
     void NotifyFailure(uint64_t) override;
 

@@ -3,6 +3,7 @@ include(cmake/sentencepiece.cmake)
 
 file(GLOB __PPL_LLM_SRC__
     src/utils/config_utils.cc
+    src/utils/profiling_utils.cc
     src/models/factory.cc
     src/models/llama/llama_worker.cc
     src/models/internlm/internlm_worker.cc)

@@ -25,6 +25,7 @@
 #include "utils/utils.h"
 #include "utils/tokenizer.h"
 #include "utils/config_utils.h"
+#include "utils/profiling_utils.h"
 
 #include "ppl/common/log.h"
 
@@ -60,6 +61,10 @@ public:
     }
 
     void OnTokenize(uint64_t id, const std::vector<int>&) override {}
+
+    void OnProfiling(const Profiler& profiler) override {
+        utils::PrintProfiler(profiler);
+    }
 
     void Send(const std::vector<Response>& batched_rsp) override {
         for (const auto& rsp : batched_rsp) {

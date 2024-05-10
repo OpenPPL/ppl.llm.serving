@@ -42,5 +42,5 @@ target_include_directories(ppl_llm_grpc_proto_static PUBLIC
 
 file(GLOB __SRC__ src/serving/grpc/*.cc)
 add_library(ppl_llm_grpc_serving_static STATIC ${__SRC__})
-target_link_libraries(ppl_llm_grpc_serving_static PUBLIC ppl_llm_grpc_proto_static grpc++ pplcommon_static pthread)
+target_link_libraries(ppl_llm_grpc_serving_static PUBLIC ppl_llm_static ppl_llm_grpc_proto_static grpc++ pplcommon_static pthread)
 target_include_directories(ppl_llm_grpc_serving_static PUBLIC src)

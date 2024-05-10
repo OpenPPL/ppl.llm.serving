@@ -18,6 +18,7 @@
 #include "grpc_server.h"
 #include "common/connection.h"
 #include "utils/queue_request_scheduler.h"
+#include "utils/profiling_utils.h"
 
 #include "ppl/common/log.h"
 
@@ -28,6 +29,10 @@ using namespace ppl::common;
 using namespace grpc;
 
 namespace ppl { namespace llm {
+
+void GRPCConnection::OnProfiling(const Profiler& profiler) {
+    utils::PrintProfiler(profiler);
+}
 
 static void AcquireEvent(GRPCEvent* event) {
     event->refcount.fetch_add(1, std::memory_order_acq_rel);

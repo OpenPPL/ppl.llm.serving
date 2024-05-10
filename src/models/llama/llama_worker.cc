@@ -40,46 +40,21 @@ using namespace ppl::nn;
 #ifdef PPL_LLM_ENABLE_PROFILING
 #ifdef PPLNN_USE_LLM_CUDA
 #include <cuda_runtime.h>
-static void PrintMemUsage() {
+static void GetMemUsage(double* dev_mem_total, double* dev_mem_free) {
     size_t free_bytes, total_bytes;
     cudaMemGetInfo(&free_bytes, &total_bytes);
-    float free = static_cast<float>(free_bytes) / 1024.0 / 1024.0 / 1024.0;
-    float total = static_cast<float>(total_bytes) / 1024.0 / 1024.0 / 1024.0;
-    float used = total - free;
-    fprintf(stderr, "memory usage: (%.2f - %.2f) -> %.2f GiB\n", total, free, used);
+    *dev_mem_free = static_cast<float>(free_bytes) / 1024.0 / 1024.0 / 1024.0;
+    *dev_mem_total = static_cast<float>(total_bytes) / 1024.0 / 1024.0 / 1024.0;
 }
 #else
-static void PrintMemUsage() {
-    fprintf(stderr, "memory usage: unknown\n");
+static void GetMemUsage(double* dev_mem_total, double* dev_mem_free) {
+    *dev_mem_total = 0;
+    *dev_mem_free = 0;
 }
 #endif
 #endif
 
 namespace ppl { namespace llm { namespace llama {
-
-struct Profiler final {
-    int prompt_cnt = 0;
-    int gen_token_cnt = 0;
-
-    int max_running_batch = 0;
-    int pending_task_size = 0;
-
-    double prepare_duration = 0;
-    double model_duration = 0;
-    double sampling_duration = 0;
-    double total_duration = 0;
-    double set_input_duration = 0;
-    double send_duration = 0;
-    double early_finish_duration = 0;
-
-    double step_prepare_duration = 0;
-    double step_set_input_duration = 0;
-    double step_model_duration = 0;
-    double step_sampling_duration = 0;
-    double step_send_duration = 0;
-    double step_early_finish_duration = 0;
-    double step_total_duration = 0;
-};
 
 class DecodeAndSendTask final {
 public:
@@ -123,41 +98,6 @@ private:
     std::vector<TidGenToken>* tid_gen_token_list_;
     Connection* conn_;
 };
-
-#ifdef PPL_LLM_ENABLE_PROFILING
-static void PrintProfilingMsg(const Profiler& profiler, int step, int running_batch, uint64_t kv_max_blk,
-                              uint64_t kv_rest_blk) {
-    fprintf(stderr, "[PERF] --- step %d -------------------------------------------------\n", step);
-    fprintf(stderr, "[PERF]  |- ");
-    ::PrintMemUsage();
-    fprintf(stderr, "[PERF]  |- kv cache usage: %.2f %%\n", (1.0f - (double)kv_rest_blk / kv_max_blk) * 100.0);
-    fprintf(stderr, "[PERF]  |- pending task number: %d\n", profiler.pending_task_size);
-    fprintf(stderr, "[PERF]  |- running batch: %d, max running batch: %d\n", running_batch, profiler.max_running_batch);
-    fprintf(stderr, "[PERF]  |- finished query count: %d, QPS: %.2f\n", profiler.prompt_cnt,
-            float(profiler.prompt_cnt) / profiler.total_duration * 1000);
-    fprintf(stderr, "[PERF]  |- gen token count: %d, avg gen len: %.2f, TPS: %.2f\n", profiler.gen_token_cnt,
-            profiler.prompt_cnt ? profiler.gen_token_cnt / float(profiler.prompt_cnt) : 0.0f,
-            float(profiler.gen_token_cnt) / profiler.total_duration * 1000);
-
-    fprintf(stderr, "[PERF]  |- pipeline          | cur: %.2f ms, | avg: %.2f ms, | total: %.2f ms\n",
-            profiler.step_total_duration, profiler.total_duration / step, profiler.total_duration);
-    fprintf(stderr, "[PERF]  |-- batching         | cur: %.2f ms, | avg: %.2f ms, | total: %.2f ms\n",
-            profiler.step_prepare_duration, profiler.prepare_duration / step, profiler.prepare_duration);
-    fprintf(stderr, "[PERF]  |-- copy inputs      | cur: %.2f ms, | avg: %.2f ms, | total: %.2f ms\n",
-            profiler.step_set_input_duration, profiler.set_input_duration / step, profiler.set_input_duration);
-    fprintf(stderr, "[PERF]  |-- model inference  | cur: %.2f ms, | avg: %.2f ms, | total: %.2f ms\n",
-            profiler.step_model_duration, profiler.model_duration / step, profiler.model_duration);
-    fprintf(stderr, "[PERF]  |-- sampling         | cur: %.2f ms, | avg: %.2f ms, | total: %.2f ms\n",
-            profiler.step_sampling_duration, profiler.sampling_duration / step, profiler.sampling_duration);
-    fprintf(stderr, "[PERF]  |-- send response    | cur: %.2f ms, | avg: %.2f ms, | total: %.2f ms\n",
-            profiler.step_send_duration, profiler.send_duration / step, profiler.send_duration);
-    fprintf(stderr, "[PERF]  |-- early finish     | cur: %.2f ms, | avg: %.2f ms, | total: %.2f ms\n",
-            profiler.step_early_finish_duration, profiler.early_finish_duration / step, profiler.early_finish_duration);
-
-    fprintf(stderr, "[PERF]  |- schedule cost: %.2f %%\n",
-            (profiler.total_duration - profiler.model_duration) / profiler.total_duration * 100);
-}
-#endif
 
 #ifdef PPL_LLM_ENABLE_DEBUG
 #include <unistd.h>
@@ -917,7 +857,7 @@ void LLaMAWorker::Work() {
             // early finish
             if (worker_controller_.tid_finished.size() > 0) {
                 LOG(DEBUG) << "Do early finish";
-                profiler.prompt_cnt += worker_controller_.tid_finished.size();
+                profiler.finished_cnt += worker_controller_.tid_finished.size();
                 DeleteTask(worker_controller_.tid_finished, &tid_controllers);
             }
         }
@@ -931,7 +871,12 @@ void LLaMAWorker::Work() {
 
 #ifdef PPL_LLM_ENABLE_PROFILING
         if (step % 100 == 0 || worker_controller_.total_rest_iters == 0) {
-            PrintProfilingMsg(profiler, step, running_batch, kv_cache_max_tokens_, idx_mgr_.GetAvailableBlockNum());
+            profiler.step = step;
+            profiler.running_batch = running_batch;
+            profiler.kv_max_blk = kv_cache_max_tokens_;
+            profiler.kv_rest_blk = idx_mgr_.GetAvailableBlockNum();
+            GetMemUsage(&profiler.dev_mem_total, &profiler.dev_mem_free);
+            conn_->OnProfiling(profiler);
         }
 #endif
     }
