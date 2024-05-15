@@ -485,10 +485,10 @@ void LLaMAWorker::DeleteTasks(TypedMPSCQueue<FinishedTaskInfo>* finished_tasks,
                               unordered_map<uint64_t, TidController>* tid_controllers,
                               int* accu_task_count) {
     // process finished task
-    FinishedTaskInfo info;
     while (true) {
-        info = finished_tasks->Pop();
-        if (info.id == UINT64_MAX) {
+        FinishedTaskInfo info;
+        bool ok = finished_tasks->Pop(&info);
+        if (!ok) {
             break;
         }
 
