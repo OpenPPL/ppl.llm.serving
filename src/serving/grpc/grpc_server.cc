@@ -17,7 +17,7 @@
 
 #include "grpc_server.h"
 #include "common/connection.h"
-#include "utils/queue_request_scheduler.h"
+#include "utils/mpsc_request_scheduler.h"
 #include "utils/profiling_utils.h"
 
 #include "ppl/common/log.h"

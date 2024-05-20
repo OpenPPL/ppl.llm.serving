@@ -23,7 +23,6 @@
 #include "backends/cuda/resource_manager.h"
 #include "common/processor.h"
 #include "utils/index_manager.h"
-#include "utils/queue_request_scheduler.h"
 #include "utils/utils.h"
 #include "utils/tokenizer.h"
 #include "utils/config_utils.h"

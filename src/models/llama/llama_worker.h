@@ -22,7 +22,7 @@
 #include "../../models/config.h"
 #include "../../models/resource.h"
 #include "../../utils/index_manager.h"
-#include "../../utils/queue_request_scheduler.h"
+#include "../../utils/mpsc_request_scheduler.h"
 #include "../../utils/sampler.h"
 #include "../../utils/tokenizer.h"
 
@@ -47,11 +47,14 @@ struct TidGenToken final {
 };
 
 struct FinishedTaskInfo final {
-    uint64_t id = UINT64_MAX;
+    FinishedTaskInfo(uint64_t fid = UINT64_MAX, uint32_t ftype = UNKNOWN) : id(fid), type(ftype) {}
+    uint64_t id;
     enum {
+        UNKNOWN,
         FROM_WORKER,
         FROM_CONN,
-    } type;
+    };
+    uint32_t type;
 };
 
 struct TidController final {
@@ -128,7 +131,7 @@ struct WorkerThreadArg final {
     ppl::nn::Tensor* logits;
 };
 
-struct LlamaRequest final {
+struct LlamaRequest final : public ppl::common::MPSCQueue::Node {
     std::shared_ptr<Request> orig;
     std::shared_ptr<std::vector<int>> token_id_list;
     std::shared_ptr<std::unordered_set<int>> stop_tokens;
@@ -178,12 +181,12 @@ private:
 
     uint64_t kv_cache_max_tokens_;
 
-    bool worker_thread_active_ = false;
+    std::atomic<bool> worker_thread_active_ = {false};
     pthread_t worker_thread_;
 
-    pthread_cond_t req_signal_;
+    ppl::common::EventCount req_signal_;
 
-    utils::QueueRequestScheduler<LlamaRequest> sched_;
+    utils::MPSCRequestScheduler<LlamaRequest> sched_;
 
 private:
     static constexpr int DECODER_THREAD_NUM = 2;

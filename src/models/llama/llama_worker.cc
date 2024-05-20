@@ -331,15 +331,12 @@ LLaMAWorker::LLaMAWorker(const Resource& resource, const ModelConfig& mconfig, c
 }
 
 LLaMAWorker::~LLaMAWorker() {
-    if (worker_thread_active_) {
-        pthread_mutex_lock(sched_.GetQueueLock()); // to ensure that workers are waiting for status changing
-        worker_thread_active_ = false;
-        pthread_cond_signal(&req_signal_);
-        pthread_mutex_unlock(sched_.GetQueueLock());
+    bool is_active = worker_thread_active_.load(std::memory_order_relaxed);
+    if (is_active) {
+        worker_thread_active_.store(false, std::memory_order_release);
+        req_signal_.NotifyOne();
         pthread_join(worker_thread_, nullptr);
     }
-
-    pthread_cond_destroy(&req_signal_);
 }
 
 RetCode LLaMAWorker::Init() {
@@ -404,7 +401,6 @@ RetCode LLaMAWorker::Init() {
     }
 
     worker_thread_active_ = true;
-    pthread_cond_init(&req_signal_, nullptr);
     auto err = pthread_create(&worker_thread_, nullptr, WorkerThreadFunc, this);
     if (err != 0) {
         worker_thread_active_ = false;
@@ -458,7 +454,7 @@ static bool ParseRequest(const LlamaRequest& req, const RequestCheckResult& chec
 }
 
 void LLaMAWorker::ClearTask(uint64_t tid) {
-    worker_controller_.finished_tasks.Push({tid, FinishedTaskInfo::FROM_CONN});
+    worker_controller_.finished_tasks.Push(FinishedTaskInfo(tid, FinishedTaskInfo::FROM_CONN));
 }
 
 static int RemoveFinishedTask(WorkerController* worker_controller, void* ptr) {
@@ -731,7 +727,7 @@ void LLaMAWorker::Work() {
             if (worker_controller_.tid_list.size() < (size_t)worker_config_.max_running_batch &&
                 cache_cool_down_count <= 0) {
                 while (true) {
-                    auto req = sched_.TryPopRequest(check_func);
+                    shared_ptr<LlamaRequest> req(sched_.TryPopRequest(check_func));
                     if (!req) {
                         break;
                     }
@@ -830,7 +826,8 @@ void LLaMAWorker::Work() {
                     tid_gen_token_list.back().is_last = true;
                     if (cache_cool_down_count > 0)
                         cache_cool_down_count--;
-                    worker_controller_.finished_tasks.Push({tid_ctrl->tid, FinishedTaskInfo::FROM_WORKER});
+                    worker_controller_.finished_tasks.Push(
+                        FinishedTaskInfo(tid_ctrl->tid, FinishedTaskInfo::FROM_WORKER));
                 }
             }
 
@@ -883,7 +880,7 @@ void LLaMAWorker::Work() {
 }
 
 void LLaMAWorker::Process(const shared_ptr<Request>& req) {
-    auto lreq = make_shared<LlamaRequest>();
+    auto lreq = new LlamaRequest();
     lreq->orig = req;
     if (!req->token_ids) {
         lreq->token_id_list = std::make_shared<std::vector<int>>();
@@ -898,27 +895,36 @@ void LLaMAWorker::Process(const shared_ptr<Request>& req) {
         lreq->is_token_in_out = true;
     }
 
-    sched_.PushRequest(lreq);
-    if (sched_.GetPendingSize() == 1) {
-        pthread_cond_signal(&req_signal_);
+    bool maybe_empty = sched_.PushRequest(lreq);
+    if (maybe_empty) {
+        req_signal_.NotifyOne();
     }
 }
 
 void* LLaMAWorker::WorkerThreadFunc(void* arg) {
     auto worker = (LLaMAWorker*)arg;
+
     while (true) {
-        pthread_mutex_lock(worker->sched_.GetQueueLock());
-        while (worker->sched_.GetPendingSize() == 0) {
-            if (!worker->worker_thread_active_) {
-                pthread_mutex_unlock(worker->sched_.GetQueueLock());
+        while (true) {
+            auto wait_key = worker->req_signal_.PrepareWait();
+            bool is_active = worker->worker_thread_active_.load(std::memory_order_acquire);
+            if (!is_active) {
+                worker->req_signal_.CancelWait();
                 return nullptr;
             }
+
+            if (worker->sched_.GetPendingSize() > 0) {
+                worker->req_signal_.CancelWait();
+                break;
+            }
+
             LOG(INFO) << "waiting for request ...";
-            pthread_cond_wait(&worker->req_signal_, worker->sched_.GetQueueLock());
+            worker->req_signal_.CommitWait(wait_key);
         }
-        pthread_mutex_unlock(worker->sched_.GetQueueLock());
+
         worker->Work();
     }
+
     return nullptr;
 }
 
