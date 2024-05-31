@@ -82,7 +82,7 @@ set(PPLNN_BUILD_SAMPLES OFF CACHE BOOL "")
 hpcc_declare_git_dep_depth1(
     pplnn
     https://github.com/openppl-public/ppl.nn.git
-    llm_v1)
+    master)
 
 # --------------------------------------------------------------------------- #
 
