@@ -32,9 +32,15 @@ struct Request final {
         : id(_id), prompt(_prompt), temperature(_temperature), generation_length(_generation_length) {}
     uint64_t id;
     std::string prompt;
-    float temperature;
-    uint32_t generation_length;
-    bool early_stopping;
+    float temperature = 1.f;
+    float top_p = 0.f;
+    int32_t top_k = 1;
+    float repetition_penalty = 1.f;
+    float presence_penalty = 0.f;
+    float frequency_penalty = 0.f;
+    int32_t generation_length = 0;
+    bool early_stopping = true;
+    bool is_token_in_out = false;
     std::shared_ptr<std::vector<int>> token_ids;
     std::shared_ptr<std::unordered_set<int>> stop_tokens;
 };

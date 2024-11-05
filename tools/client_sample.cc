@@ -30,12 +30,18 @@ public:
         std::unordered_map<int, std::string> rsp_stream_store;
         for (size_t i = 0; i < prompts.size(); i++) {
             // request
-            auto req = req_list.add_req();
+            auto* req = req_list.add_req();
             req->set_id(i);
             req->set_prompt(prompts[i]);
-            req->set_temperature(1);
+            auto* choosing_parameter = req->mutable_choosing_parameters();
+            choosing_parameter->set_do_sample(false);
+            choosing_parameter->set_temperature(1.f);
+            choosing_parameter->set_repetition_penalty(1.f);
+            choosing_parameter->set_presence_penalty(0.f);
+            choosing_parameter->set_frequency_penalty(0.f);
+
             auto* stopping_parameters = req->mutable_stopping_parameters();
-            stopping_parameters->set_max_new_tokens(64);
+            stopping_parameters->set_max_new_tokens(16);
             stopping_parameters->set_ignore_eos_token(false);
             rsp_stream_store[i] = "";
         }
@@ -101,8 +107,8 @@ int main(int argc, char** argv) {
 
     GenerationClient generator(grpc::CreateChannel(target_str, grpc::InsecureChannelCredentials()));
 
-    std::string prompt = "Building a website can be done in 10 simple steps:\n";
-    const std::vector<std::string> prompts = {3, prompt};
+    const std::string prompt = "Building a website can be done in 10 simple steps:\n";
+    const std::vector<std::string> prompts(3, prompt);
 
     std::cout << "------------------------------" << std::endl;
     std::cout << "--------- Question -------------" << std::endl;

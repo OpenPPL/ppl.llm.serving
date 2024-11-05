@@ -11,6 +11,29 @@ message Tokens {
     repeated uint32 ids = 1;
 }
 
+message NextTokenChooserParameters {
+    /// exponential scaling output probability distribution
+    float temperature = 1;
+    /// restricting to the k highest probability elements
+    uint32 top_k = 2;
+    /// restricting to top tokens summing to prob_cut_off <= prob_cut_off
+    float top_p = 3;
+    /// [not used] restricting to top tokens summing to prob_cut_off <= prob_cut_off, not used
+    float typical_p = 4;
+    /// apply sampling on the logits
+    bool do_sample = 5;
+    /// [not used] random seed for sampling, not used
+    uint64 seed = 6;
+    /// repetition penalty
+    float repetition_penalty = 7;
+    /// repetition penalty
+    float presence_penalty = 8;
+    /// repetition penalty
+    float frequency_penalty = 9;
+    /// [not used] token watermarking using "A Watermark for Large Language Models"
+    bool watermark = 10;
+}
+
 message StoppingCriteriaParameters {
     /// Maximum number of generated tokens
     uint32 max_new_tokens = 1;
@@ -23,9 +46,9 @@ message StoppingCriteriaParameters {
 
 message Request {
     uint64 id = 1;
-    float temperature = 2;
-    string prompt = 3;
-    Tokens tokens = 4;
+    string prompt = 2;
+    Tokens tokens = 3;
+    NextTokenChooserParameters choosing_parameters = 4;
     StoppingCriteriaParameters stopping_parameters = 5;
 }
 
@@ -39,11 +62,24 @@ enum Status {
     FAILED = 2;
 }
 
+enum FinishReason {
+    FINISH_REASON_LENGTH = 0;
+    FINISH_REASON_EOS_TOKEN = 1;
+    FINISH_REASON_STOP_SEQUENCE = 2;
+}
+
+message Detail {
+    float logprobs = 1;
+    bool is_special = 2;
+    FinishReason finish_reason = 3;
+}
+
 message Response {
     Status status = 1;
     uint64 id = 2;
     string generated = 3;
     Tokens tokens = 4;
+    Detail detail = 5;
 }
 
 message BatchedResponse {

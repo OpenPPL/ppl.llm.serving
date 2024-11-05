@@ -20,16 +20,18 @@
 
 #include "response.h"
 #include "profiler.h"
+#include "ppl/common/retcode.h"
+#include <vector>
 
 namespace ppl { namespace llm {
 
 class Connection {
 public:
     virtual ~Connection() {}
-    virtual void OnProfiling(const Profiler&) = 0;
+    virtual void OnProfiling(const std::shared_ptr<WorkerProfiler>&) = 0;
     virtual void OnTokenize(uint64_t id, const std::vector<int>&) = 0;
     virtual void Send(const std::vector<Response>&) = 0;
-    virtual void NotifyFailure(uint64_t id) = 0;
+    virtual void NotifyFailure(uint64_t id, ppl::common::RetCode, const std::string& errmsg) = 0;
 };
 
 }} // namespace ppl::llm

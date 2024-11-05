@@ -29,10 +29,10 @@ Define_string_opt("--dataset", g_flag_dataset, "", "Path to the dataset.");
 Define_string_opt("--request_rate", g_flag_request_rate, "inf",
                   "Number of request per second. If this is inf, then all the requests are sent at time 0. Otherwise, "
                   "we use Poisson process to synthesize the request arrival times.");
-Define_bool_opt("--early_stopping", g_flag_early_stopping, true,
+Define_bool_opt("--early_stopping", g_flag_early_stopping, false,
                   "whether enable early stopping when met end token id");
 
-struct TidRecord {
+struct TidRecord final {
     int prompt_len;
     int exp_output_len;
     int real_output_len = 0;
@@ -45,6 +45,7 @@ struct TidRecord {
 };
 
 static std::unordered_map<int, std::string> g_rsp_stream_store;
+static std::unordered_map<int, std::string> g_prompt_map;
 static std::vector<double> g_decode_latecy_list; 
 static int g_finished_cnt = 0;
 static int g_num_request = 0;
@@ -75,12 +76,18 @@ void SampleRequest(const std::string& dataset_path, const sentencepiece::Sentenc
         auto* req = batch_req->add_req();
         req->set_id(tid);
         req->set_prompt(prompt);
-        req->set_temperature(1);
+        auto* choosing_parameter = req->mutable_choosing_parameters();
+        choosing_parameter->set_do_sample(false);
+        choosing_parameter->set_temperature(1.f);
+        choosing_parameter->set_repetition_penalty(1.f);
+        choosing_parameter->set_presence_penalty(0.f);
+        choosing_parameter->set_frequency_penalty(0.f);
+
         auto* stopping_parameters = req->mutable_stopping_parameters();
         stopping_parameters->set_max_new_tokens(ans_token_ids.size());
         stopping_parameters->set_ignore_eos_token(!early_stopping);
         req_list->push_back(batch_req);
-
+        g_prompt_map[tid] = prompt;
         auto& tid_record = g_tid_record_map.emplace(tid, TidRecord()).first->second;
         tid_record.prompt_len = prompt_token_ids.size();
         tid_record.exp_output_len = ans_token_ids.size();
@@ -153,7 +160,7 @@ public:
     }
 
 private:
-    struct AsyncClientCall {
+    struct AsyncClientCall final {
         void HandleResponse(bool responseStatus) {
             switch (callStatus_) {
                 case CREATE:
@@ -194,8 +201,10 @@ private:
                     if (status.ok()) {
                         for (const auto& rsp : this->reply.rsp()) {
                             g_tid_record_map[rsp.id()].finished_time = std::chrono::high_resolution_clock::now();
-                            LOG(INFO) << "Finish: " << g_finished_cnt << "/" << g_num_request;
-                            LOG(INFO) << "Server Response Completed: " << rsp.id();
+                            std::cout << "Finish: " << g_finished_cnt << "/" << g_num_request << std::endl;
+                            std::cout << "Server Response Completed: " << rsp.id() << std::endl;
+                            // std::cout << "Prompt: " << g_prompt_map[rsp.id()] << std::endl;
+                            // std::cout << "Ans: " << g_rsp_stream_store[rsp.id()] << std::endl;
                         }                        
                     } else {
                         LOG(ERROR) << "RPC failed";
