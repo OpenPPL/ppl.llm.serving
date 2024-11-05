@@ -18,10 +18,11 @@
 #ifndef __SERVING_GRPC_SERVER_H__
 #define __SERVING_GRPC_SERVER_H__
 
-#include "common/processor.h"
 
 #include "llm.grpc.pb.h"
 #include "grpcpp/grpcpp.h"
+#include "../../common/connection.h"
+#include "../../generator/llm_generator.h"
 #include "ppl/common/retcode.h"
 
 #include <pthread.h>
@@ -85,9 +86,9 @@ public:
     void RemoveInfo(uint64_t id, GRPCReqInfo* info);
 
     void OnTokenize(uint64_t, const std::vector<int>&) override {}
-    void OnProfiling(const Profiler&) override;
+    void OnProfiling(const std::shared_ptr<WorkerProfiler>&) override;
     void Send(const std::vector<Response>&) override;
-    void NotifyFailure(uint64_t) override;
+    void NotifyFailure(uint64_t, ppl::common::RetCode, const std::string& errmsg) override;
 
 private:
     pthread_mutex_t id2info_lock_;
@@ -99,7 +100,7 @@ public:
     GRPCServer(GRPCConnection*, const std::function<void(uint64_t)>& on_disconnected_func);
     ~GRPCServer();
     ppl::common::RetCode Init(const std::string& addr);
-    void Loop(RequestProcessor*);
+    void Loop(LLMGenerator*);
 
 private:
     static void* NewCallThreadFunc(void*);

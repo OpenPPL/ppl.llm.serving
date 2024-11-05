@@ -1,0 +1,5 @@
+if(PPLNN_USE_LLM_CUDA)
+    add_executable(test_prefix_cache_mgr test_prefix_cache_mgr.cc)
+    target_include_directories(test_prefix_cache_mgr PRIVATE ../src)
+    target_link_libraries(test_prefix_cache_mgr PRIVATE ppl_llm_static)
+endif()

@@ -309,7 +309,13 @@ public:
             proto::Request* req = new proto::Request();
             req->set_id(start_tid + i);
             req->set_prompt(prompts[i]);
-            req->set_temperature(0.9);
+            auto* choosing_parameter = req->mutable_choosing_parameters();
+            choosing_parameter->set_do_sample(false);
+            choosing_parameter->set_temperature(1.f);
+            choosing_parameter->set_repetition_penalty(1.f);
+            choosing_parameter->set_presence_penalty(0.f);
+            choosing_parameter->set_frequency_penalty(0.f);
+
             auto* stopping_parameters = req->mutable_stopping_parameters();
             stopping_parameters->set_max_new_tokens(512);
             stopping_parameters->set_ignore_eos_token(false);
@@ -327,7 +333,12 @@ public:
                 auto req = req_list.add_req();
                 req->set_id(req_queue[i]->id());
                 req->set_prompt(req_queue[i]->prompt());
-                req->set_temperature(req_queue[i]->temperature());
+                auto* choosing_parameter = req->mutable_choosing_parameters();
+                choosing_parameter->set_do_sample(false);
+                choosing_parameter->set_temperature(1.f);
+                choosing_parameter->set_repetition_penalty(1.f);
+                choosing_parameter->set_presence_penalty(0.f);
+                choosing_parameter->set_frequency_penalty(0.f);
 
                 auto* stopping_parameters = req->mutable_stopping_parameters();
                 stopping_parameters->set_max_new_tokens(req_queue[i]->stopping_parameters().max_new_tokens());
@@ -336,7 +347,7 @@ public:
             req_queue.clear();
 
             ClientContext context;
-            std::unique_ptr<ClientReader<proto::BatchedResponse>> reader(stub_->Generation(&context, req_list));
+            std::unique_ptr<ClientReader<proto::BatchedResponse> > reader(stub_->Generation(&context, req_list));
 
             proto::BatchedResponse batched_rsp;
             while (reader->Read(&batched_rsp)) {

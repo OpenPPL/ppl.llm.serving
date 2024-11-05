@@ -1,10 +1,17 @@
 if(PPLNN_USE_LLM_CUDA)
-    add_executable(offline_inference tools/offline_inference.cc)
+    add_executable(offline_inference tools/offline_inference.cc tools/simple_flags.cc)
     target_include_directories(offline_inference PRIVATE src)
     target_link_libraries(offline_inference PRIVATE ppl_llm_static ${NCCL_LIBRARIES})
+    install(TARGETS offline_inference DESTINATION bin)
 
+    add_executable(benchmark_prefix_cache_offline tools/benchmark_prefix_cache_offline.cc tools/simple_flags.cc)
+    target_include_directories(benchmark_prefix_cache_offline PRIVATE src)
+    target_link_libraries(benchmark_prefix_cache_offline PRIVATE ppl_llm_static ${NCCL_LIBRARIES})
+endif()
+
+if(PPLNN_USE_LLM_CUDA)
     if(PPL_LLM_ENABLE_GRPC_SERVING)
-        add_executable(ppl_llm_server tools/llm_server.cc)
+        add_executable(ppl_llm_server tools/llm_server.cc tools/simple_flags.cc)
         target_link_libraries(ppl_llm_server PRIVATE
             ppl_llm_static
             ppl_llm_grpc_serving_static
@@ -29,6 +36,5 @@ if(PPLNN_USE_LLM_CUDA)
         add_executable(client_qps_measure_token_in_out tools/client_qps_measure_token_in_out.cc tools/simple_flags.cc)
         target_link_libraries(client_qps_measure_token_in_out pplnn_static ppl_llm_grpc_proto_static grpc++)
         target_include_directories(client_qps_measure_token_in_out PUBLIC ${HPCC_DEPS_DIR}/rapidjson/include)
-
     endif()
 endif()

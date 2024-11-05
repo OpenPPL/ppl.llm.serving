@@ -17,8 +17,6 @@ using grpc::Status;
 using namespace std::chrono;
 using namespace ppl::llm;
 
-ABSL_FLAG(std::string, target, "localhost:50052", "Server address");
-
 class GenerationClient {
 public:
     GenerationClient(std::shared_ptr<Channel> channel) : stub_(proto::LLMService::NewStub(channel)) {}
@@ -37,7 +35,13 @@ public:
             for (auto token : prompt_token_ids) {
                 pb_tokens->add_ids(token);
             }
-            req->set_temperature(1);
+            auto* choosing_parameter = req->mutable_choosing_parameters();
+            choosing_parameter->set_do_sample(false);
+            choosing_parameter->set_temperature(1.f);
+            choosing_parameter->set_repetition_penalty(1.f);
+            choosing_parameter->set_presence_penalty(0.f);
+            choosing_parameter->set_frequency_penalty(0.f);
+
             auto* stopping_parameters = req->mutable_stopping_parameters();
             stopping_parameters->set_max_new_tokens(64);
             stopping_parameters->set_ignore_eos_token(false);

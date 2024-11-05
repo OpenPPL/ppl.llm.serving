@@ -42,54 +42,37 @@ cd /xx/ppl.llm.serving
 ./build.sh -DPPLNN_USE_LLM_CUDA=ON -DPPLNN_CUDA_ENABLE_NCCL=ON -DPPLNN_ENABLE_CUDA_JIT=OFF -DPPLNN_CUDA_ARCHITECTURES="'80;86;87'" -DPPLCOMMON_CUDA_ARCHITECTURES="'80;86;87'"
 ```
 
-4. Set server configuration. 
+4. Launch server
 
-Here we set server configuration in file `src/models/llama/conf/llama_7b_config_example.json`. 
-
-```
-{
-    "model_type": "llama",
-    "model_dir":  "/model_data/llama_7b_ppl/",
-    "model_param_path": "/model_data/llama_7b_ppl/params.json",
-
-    "tokenizer_path": "/model_data/llama_fb/tokenizer.model",
-
-    "tensor_parallel_size": 1,
-
-    "top_p": 0.0,
-    "top_k": 1,
-
-    "quant_method": "none",
-
-    "max_tokens_scale": 0.94,
-    "max_tokens_per_request": 4096,
-    "max_running_batch": 1024,
-    "max_tokens_per_step": 8192,
-
-    "host": "0.0.0.0",
-    "port": 23333
-}
-
+Launch server with configuration file in step 4.
+```bash
+./ppl_llm_server \
+    --model-dir /data/model \
+    --model-param-path /data/model/params.json \
+    --tokenizer-path /data/tokenizer.model \
+    --tensor-parallel-size 1 \
+    --top-p 0.0 \
+    --top-k 1 \
+    --max-tokens-scale 0.94 \
+    --max-input-tokens-per-request 4096 \
+    --max-output-tokens-per-request 4096 \
+    --max-total-tokens-per-request 8192 \
+    --max-running-batch 1024 \
+    --max-tokens-per-step 8192 \
+    --host 127.0.0.1 \
+    --port 23333 
 ```
 
-where params `model_dir`, `model_param_path` and `tokenizer_path` is from step 1 and step 2, `tensor_parallel_size` is 1 in llama_7b, and would be different in other llama model.
+where params `model-dir`, `model-param-path` and `tokenizer-path` is from step 1 and step 2, `tensor-parallel-size` is 1 in llama_7b, and would be different in other llama model.
 
-| tensor_parallel_size | value |
+| tensor-parallel-size | value |
 |----------------------|-------|
 | LLaMA-7B             |   1   |
 | LLaMA-13B            |   2   |
 | LLaMA-30B            |   4   |
 | LLaMA-65B            |   8   |
 
-
-5. Launch server
-
-Launch server with configuration file in step 4.
-```bash
-./ppl-build/ppl_llm_server src/models/llama/conf/llama_7b_config_example.json
-```
-
-6. Launch client
+5. Launch client
 
 Send request through [gRPC](https://github.com/grpc/grpc) to query the model.
 

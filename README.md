@@ -17,8 +17,9 @@
 * [CMake](https://cmake.org/download/) >= 3.18
 * [Git](https://git-scm.com/downloads) >= 2.7.0
 * [CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit-archive) >= 11.4. 11.6 recommended. (for CUDA)
+* Rust & cargo >= 1.8.0. (for Huggingface Tokenizer)
 
-## Quick Start
+## PPL Server Quick Start
 
 Here is a brief tutorial, refer to [LLaMA Guide](docs/llama_guide.md) for more details.
 
@@ -37,10 +38,12 @@ Here is a brief tutorial, refer to [LLaMA Guide](docs/llama_guide.md) for more d
 * Building from Source
 
     ```bash
-    ./build.sh -DPPLNN_USE_LLM_CUDA=ON -DPPLNN_CUDA_ENABLE_NCCL=ON -DPPLNN_ENABLE_CUDA_JIT=OFF -DPPLNN_CUDA_ARCHITECTURES="'80;86;87'" -DPPLCOMMON_CUDA_ARCHITECTURES="'80;86;87'"
+    ./build.sh  -DPPLNN_USE_LLM_CUDA=ON  -DPPLNN_CUDA_ENABLE_NCCL=ON -DPPLNN_ENABLE_CUDA_JIT=OFF -DPPLNN_CUDA_ARCHITECTURES="'80;86;87'" -DPPLCOMMON_CUDA_ARCHITECTURES="'80;86;87'" -DPPL_LLM_ENABLE_GRPC_SERVING=ON
     ```
 
     NCCL is required if multiple GPU devices are used.
+
+    We support **Sync Decode** feature (mainly for offline_inference), which means model forward and decode in the same thread. To enable this feature, compile with marco `-DPPL_LLM_SERVING_SYNC_DECODE=ON`.
 
 * Exporting Models
 
@@ -49,14 +52,28 @@ Here is a brief tutorial, refer to [LLaMA Guide](docs/llama_guide.md) for more d
 * Running Server
 
     ```bash
-    ./ppl-build/ppl_llama_server /path/to/server/config.json
+    ./ppl_llm_server \
+        --model-dir /data/model \
+        --model-param-path /data/model/params.json \
+        --tokenizer-path /data/tokenizer.model \
+        --tensor-parallel-size 1 \
+        --top-p 0.0 \
+        --top-k 1 \
+        --max-tokens-scale 0.94 \
+        --max-input-tokens-per-request 4096 \
+        --max-output-tokens-per-request 4096 \
+        --max-total-tokens-per-request 8192 \
+        --max-running-batch 1024 \
+        --max-tokens-per-step 8192 \
+        --host 127.0.0.1 \
+        --port 23333 
     ```
 
-    Server config examples can be found in `src/models/llama/conf`. You are expected to give the correct values before running the server.
+    You are expected to give the correct values before running the server.
 
-    - `model_dir`: path of models exported by [ppl.pmx](https://github.com/openppl-public/ppl.pmx).
-    - `model_param_path`: params of models. `$model_dir/params.json`.
-    - `tokenizer_path`: tokenizer files for `sentencepiece`.
+    - `model-dir`: path of models exported by [ppl.pmx](https://github.com/openppl-public/ppl.pmx).
+    - `model-param-path`: params of models. `$model_dir/params.json`.
+    - `tokenizer-path`: tokenizer files for `sentencepiece`.
 
 * Running client: send request through gRPC to query the model
 
@@ -75,7 +92,21 @@ Here is a brief tutorial, refer to [LLaMA Guide](docs/llama_guide.md) for more d
 * Running inference offline:
 
     ```bash
-    ./ppl-build/offline_inference /path/to/server/config.json
+    ./offline_inference \
+        --model-dir /data/model \
+        --model-param-path /data/model/params.json \
+        --tokenizer-path /data/tokenizer.model \
+        --tensor-parallel-size 1 \
+        --top-p 0.0 \
+        --top-k 1 \
+        --max-tokens-scale 0.94 \
+        --max-input-tokens-per-request 4096 \
+        --max-output-tokens-per-request 4096 \
+        --max-total-tokens-per-request 8192 \
+        --max-running-batch 1024 \
+        --max-tokens-per-step 8192 \
+        --host 127.0.0.1 \
+        --port 23333 
     ```
     See [tools/offline_inference.cc](tools/offline_inference.cc) for more details.
 
