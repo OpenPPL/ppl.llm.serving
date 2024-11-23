@@ -23,14 +23,21 @@
 
 namespace ppl { namespace llm {
 
+// ref: https://huggingface.github.io/text-generation-inference/
+enum class FinishFlag {
+    NOT_FINISHED,
+    LENGTH, 
+    EOS_TOKEN,
+    STOP_SEQUENCE   // not used yet
+};
+
 struct Response final {
-    enum {
-        IS_LAST,
-        NORMAL,
-    } flag;
     uint64_t id;
     std::string generated;
     int token;
+    FinishFlag finish_flag;
+    float logprob;
+    bool is_special;
 };
 
 }} // namespace ppl::llm

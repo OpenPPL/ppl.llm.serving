@@ -27,10 +27,10 @@ Define_string_opt("--dataset", g_flag_dataset, "", "Path to the dataset.");
 Define_string_opt("--request_rate", g_flag_request_rate, "inf",
                   "Number of request per second. If this is inf, then all the requests are sent at time 0. Otherwise, "
                   "we use Poisson process to synthesize the request arrival times.");
-Define_bool_opt("--early_stopping", g_flag_early_stopping, true,
+Define_bool_opt("--early_stopping", g_flag_early_stopping, false,
                   "whether enable early stopping when met end token id");
 
-struct TidRecord {
+struct TidRecord final {
     int prompt_len;
     int exp_output_len;
     int real_output_len = 0;
@@ -64,11 +64,17 @@ void SampleRequest(const std::string& dataset_path, bool early_stopping, std::ve
         auto batch_req = std::make_shared<proto::BatchedRequest>(); // batch_size = 1
         auto* req = batch_req->add_req();
         req->set_id(tid);
-        req->set_temperature(1);
         auto* pb_tokens = req->mutable_tokens();
         for (auto it = input_token_ids.begin(); it != input_token_ids.end(); ++it) {
             pb_tokens->add_ids(it->GetInt());
         }
+
+        auto* choosing_parameter = req->mutable_choosing_parameters();
+        choosing_parameter->set_do_sample(false);
+        choosing_parameter->set_temperature(1.f);
+        choosing_parameter->set_repetition_penalty(1.f);
+        choosing_parameter->set_presence_penalty(0.f);
+        choosing_parameter->set_frequency_penalty(0.f);
 
         auto* stopping_parameters = req->mutable_stopping_parameters();
         stopping_parameters->set_max_new_tokens(gen_len);
@@ -147,7 +153,7 @@ public:
     }
 
 private:
-    struct AsyncClientCall {
+    struct AsyncClientCall final {
         void HandleResponse(bool responseStatus) {
             switch (callStatus_) {
                 case CREATE:

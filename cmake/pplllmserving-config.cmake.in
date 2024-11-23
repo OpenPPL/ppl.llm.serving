@@ -29,11 +29,12 @@ set(PPL_LLM_LINK_DIRS ${__PPL_LLM_PACKAGE_ROOTDIR__}/lib)
 # --------------------------------------------------------------------------- #
 
 # sentencepiece
+include(${__PPL_LLM_PACKAGE_ROOTDIR__}/lib/cmake/absl/abslConfig.cmake)
 
 add_library(ppl_sentencepiece_pb_static STATIC IMPORTED)
-get_filename_component(__LIB_PATH__ "${__PPL_LLM_PACKAGE_ROOTDIR__}/lib/@HPCC_STATIC_LIB_PREFIX@ppl_sentencepiece_pb_static@HPCC_STATIC_LIB_SUFFIX@" ABSOLUTE)
+get_filename_component(__LIB_PATH__ "${__PPL_LLM_PACKAGE_ROOTDIR__}/lib/@HPCC_STATIC_LIB_PREFIX@@PPL_LLM_SENTENCEPIECE_PROTOBUF_LIBS@@HPCC_STATIC_LIB_SUFFIX@" ABSOLUTE)
 set_target_properties(ppl_sentencepiece_pb_static PROPERTIES
-    INTERFACE_LINK_LIBRARIES "protobuf::libprotobuf"
+    INTERFACE_LINK_LIBRARIES "protobuf::libprotobuf;absl::strings;absl::flags;absl::flags_parse"
     IMPORTED_LOCATION "${__LIB_PATH__}"
     IMPORTED_LOCATION_DEBUG "${__LIB_PATH__}"
     IMPORTED_LOCATION_RELEASE "${__LIB_PATH__}")

@@ -17,8 +17,8 @@
 
 #include "grpc_server.h"
 #include "common/connection.h"
+#include "common/profiler.h"
 #include "utils/mpsc_request_scheduler.h"
-#include "utils/profiling_utils.h"
 
 #include "ppl/common/log.h"
 
@@ -30,8 +30,8 @@ using namespace grpc;
 
 namespace ppl { namespace llm {
 
-void GRPCConnection::OnProfiling(const Profiler& profiler) {
-    utils::PrintProfiler(profiler);
+void GRPCConnection::OnProfiling(const std::shared_ptr<WorkerProfiler>& worker_profiler) {
+    PrintProfiler(*worker_profiler);
 }
 
 static void AcquireEvent(GRPCEvent* event) {
@@ -86,6 +86,12 @@ static void SendBatchRes(proto::BatchedResponse&& pb_batch_res, int nr_finished_
 }
 
 void GRPCConnection::Send(const vector<Response>& res_list) {
+    static const std::map<FinishFlag, proto::FinishReason> finish_flag2str = {
+        {FinishFlag::LENGTH, proto::FINISH_REASON_LENGTH},
+        {FinishFlag::EOS_TOKEN, proto::FINISH_REASON_EOS_TOKEN},
+        {FinishFlag::STOP_SEQUENCE, proto::FINISH_REASON_STOP_SEQUENCE}
+    };
+
     for (auto& res: res_list) {
         GRPCReqInfo info;
         FindInfo(res.id, &info);
@@ -94,7 +100,7 @@ void GRPCConnection::Send(const vector<Response>& res_list) {
             continue;
         }
 
-        bool is_last = (res.flag == Response::IS_LAST);
+        bool is_last = (res.finish_flag != FinishFlag::NOT_FINISHED);
         proto::BatchedResponse pb_batch_res;
         auto* pb_res = pb_batch_res.add_rsp();
         pb_res->set_status(is_last ? proto::FINISHED : proto::PROCESSING);
@@ -105,7 +111,14 @@ void GRPCConnection::Send(const vector<Response>& res_list) {
             auto* tokens = pb_res->mutable_tokens();
             tokens->add_ids(res.token);
         }
+        auto* detail = pb_res->mutable_detail();
+        detail->set_logprobs(res.logprob);
+        bool is_special = res.is_special;
+        detail->set_is_special(is_special);
+        proto::FinishReason finish_reason = finish_flag2str.find(res.finish_flag)->second;
+        detail->set_finish_reason(finish_reason);
 
+        // in fact, we send only one per batch
         SendBatchRes(std::move(pb_batch_res), is_last, info.event);
 
         if (is_last) {
@@ -120,7 +133,7 @@ void GRPCConnection::Send(const vector<Response>& res_list) {
     }
 }
 
-void GRPCConnection::NotifyFailure(uint64_t id) {
+void GRPCConnection::NotifyFailure(uint64_t id, RetCode, const string&) {
     GRPCReqInfo info;
     RemoveInfo(id, &info);
     if (!info.event) {
@@ -142,7 +155,40 @@ GRPCServer::GRPCServer(GRPCConnection* c, const function<void(uint64_t)>& on_dis
     arg_.on_disconnected_func = on_disconnected_func;
 }
 
-void GRPCServer::Loop(RequestProcessor* processor) {
+static void ParseRequest(const proto::Request& pb_req, uint64_t id, std::shared_ptr<Request> req) {
+    req->id = id;
+    if (!pb_req.prompt().empty()) {
+        req->prompt = pb_req.prompt();
+    } else {
+        req->token_ids = std::make_shared<std::vector<int>>(pb_req.tokens().ids().begin(), pb_req.tokens().ids().end());
+        req->stop_tokens = std::make_shared<std::unordered_set<int>>(pb_req.stopping_parameters().stop_tokens().ids().begin(), pb_req.stopping_parameters().stop_tokens().ids().begin());
+    }
+    bool do_sample = pb_req.choosing_parameters().do_sample();
+    if (!do_sample) {
+        req->top_k = 1;
+        req->top_p = 0.f;
+    } else {
+        req->top_k = pb_req.choosing_parameters().top_k();
+        req->top_p = pb_req.choosing_parameters().top_p();
+    }
+    if (req->top_p > 1 || req->top_p < 0) {
+        req->top_p = 0.f;
+    }
+    req->temperature = pb_req.choosing_parameters().temperature();
+    if (req->temperature == 0.f) {
+        req->temperature = 1.f;
+    }
+    req->repetition_penalty = pb_req.choosing_parameters().repetition_penalty();
+    if (req->repetition_penalty == 0.f) {
+        req->repetition_penalty = 1.f;
+    }
+    req->presence_penalty = pb_req.choosing_parameters().presence_penalty();
+    req->frequency_penalty = pb_req.choosing_parameters().frequency_penalty();
+    req->generation_length = pb_req.stopping_parameters().max_new_tokens();
+    req->early_stopping = !pb_req.stopping_parameters().ignore_eos_token();
+}
+
+void GRPCServer::Loop(LLMGenerator* processor) {
     auto cq = arg_.notification_cq.get();
     auto service = &arg_.service;
 
@@ -196,16 +242,8 @@ void GRPCServer::Loop(RequestProcessor* processor) {
                 for (int req_idx = 0; req_idx < event->pb_req.req_size(); ++req_idx) {
                     auto& pb_req = event->pb_req.req(req_idx);
                     auto req = make_shared<Request>();
-                    req->id = event->mapped_id_start + req_idx;
-                    if (!pb_req.prompt().empty()) {
-                        req->prompt = pb_req.prompt();
-                    } else {
-                        req->token_ids = std::make_shared<std::vector<int>>(pb_req.tokens().ids().begin(), pb_req.tokens().ids().end());
-                        req->stop_tokens = std::make_shared<std::unordered_set<int>>(pb_req.stopping_parameters().stop_tokens().ids().begin(), pb_req.stopping_parameters().stop_tokens().ids().begin());
-                    }
-                    req->temperature = pb_req.temperature();
-                    req->generation_length = pb_req.stopping_parameters().max_new_tokens();
-                    req->early_stopping = !pb_req.stopping_parameters().ignore_eos_token();
+                    uint64_t id = event->mapped_id_start + req_idx;
+                    ParseRequest(pb_req, id, req);
                     processor->Process(req);
                 }
 
