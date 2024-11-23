@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#ifndef __PPL_LLM_UTILS_INDEX_MANAGER_H__
-#define __PPL_LLM_UTILS_INDEX_MANAGER_H__
+#ifndef __PPL_LLM_INDEX_MANAGER_H__
+#define __PPL_LLM_INDEX_MANAGER_H__
 
 #include "ppl/common/compact_addr_manager.h"
 

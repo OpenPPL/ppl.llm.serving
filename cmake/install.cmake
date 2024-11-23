@@ -1,11 +1,13 @@
+if(NOT PPL_LLM_ENABLE_LLAMA)
+    return()
+endif()
+
 set(__PPLNN_CMAKE_CONFIG_FILE__ ${CMAKE_CURRENT_BINARY_DIR}/generated/pplllmserving-config.cmake)
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/cmake/pplllmserving-config.cmake.in
     ${__PPLNN_CMAKE_CONFIG_FILE__}
     @ONLY)
 install(FILES ${__PPLNN_CMAKE_CONFIG_FILE__} DESTINATION lib/cmake/ppl)
 unset(__PPLNN_CMAKE_CONFIG_FILE__)
-
-install(TARGETS ppl_llm_static DESTINATION lib)
 
 file(GLOB __TMP__ src/common/*.h)
 install(FILES ${__TMP__} DESTINATION include/ppl/llm/common)

@@ -76,7 +76,7 @@ target_include_directories(ppl_sentencepiece_static PUBLIC
 target_compile_definitions(ppl_sentencepiece_static PRIVATE _USE_EXTERNAL_PROTOBUF)
 
 if(PPL_LLM_INSTALL)
-    install(TARGETS ppl_sentencepiece_pb_static DESTINATION lib)
+    install(TARGETS ${PPL_LLM_SENTENCEPIECE_PROTOBUF_LIBS} DESTINATION lib)
     install(TARGETS ppl_sentencepiece_static DESTINATION lib)
 endif()
 
