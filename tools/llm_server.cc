@@ -24,12 +24,14 @@
 #include "utils/utils.h"
 #include "generator/llm_generator.h"
 #include "ppl/common/log.h"
+#include "backtrace.h"
 #include <memory>
 #include <unordered_map>
 #include <string>
 #include <vector>
 #include <iostream>
 #include <thread>
+#include <signal.h>
 
 using namespace std;
 using namespace ppl::llm;
@@ -89,6 +91,7 @@ Define_int32_opt("--control-port", g_flag_control_port, 12345, "");
 Define_bool_opt("--enable-prefix-cache", g_flag_enable_prefix_cache, false, "is enable prefix cache");
 Define_int32_opt("--max-prefill-batch", g_flag_max_prefill_batch, 64, "max prefill batches per step");
 Define_bool_opt("--enable-profiling", g_flag_enable_profiling, false, "print profiling message");
+Define_bool_opt("--enable-backtrace", g_flag_enable_backtrace, false, "print profiling message");
 
 /* ------------------------------------------------------------------------- */
 
@@ -134,6 +137,7 @@ static bool CheckInputArgs() {
     PrintArg(enable_prefix_cache);
     PrintArg(max_prefill_batch);
     PrintArg(enable_profiling);
+    PrintArg(enable_backtrace);
 
     if (g_flag_tensor_parallel_size <= 0 || (g_flag_tensor_parallel_size & (g_flag_tensor_parallel_size - 1)) != 0) {
         LOG(ERROR) << "tensor_parallel_size must be power of 2, which is " << g_flag_tensor_parallel_size;
@@ -233,6 +237,21 @@ static bool SetGeneratorConfig(GeneratorConfig* generator_config) {
     return true;
 }
 
+static void PrintStack(int sig_num) {
+    fprintf(stderr, "sig [%d] caught. backtrace:\n%s\n", sig_num, BackTrace::Get().c_str());
+    exit(sig_num);
+}
+
+static void RegisterSignalAction() {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(struct sigaction));
+    LOG(INFO) << "RegisterSignalAction: ";
+    sa.sa_handler = PrintStack;
+    sigaction(SIGSEGV, &sa, nullptr); // segment fault
+    sigaction(SIGFPE, &sa, nullptr); // floating point exception
+    sigaction(SIGILL, &sa, nullptr); // illegal instruction
+}
+
 int main(int argc, char* argv[]) {
     simple_flags::parse_args(argc, argv);
     if (!simple_flags::get_unknown_flags().empty()) {
@@ -254,6 +273,10 @@ int main(int argc, char* argv[]) {
     if (!CheckInputArgs()) {
         LOG(ERROR) << "Check input args failed";
         return -1;
+    }
+
+    if (g_flag_enable_backtrace) {
+        RegisterSignalAction();
     }
 
     ResourceConfig resource_config;

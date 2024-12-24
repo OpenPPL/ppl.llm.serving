@@ -8,7 +8,7 @@ option(PPL_LLM_INSTALL "" ON)
 option(PPL_LLM_ENABLE_GRPC_SERVING "" ON)
 option(PPL_LLM_SERVING_SYNC_DECODE "" OFF)
 
-option(PPL_LLM_ENABLE_HF_TOKENIZER "" ON)
+option(PPL_LLM_ENABLE_HF_TOKENIZER "" OFF)
 option(PPL_LLM_ENABLE_TEST "" OFF)
 
 # --------------------------------------------------------------------------- #
